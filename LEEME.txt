@@ -1,0 +1,4 @@
+YT Pro (APK con servidor interno): yt-dlp + FFmpeg + servidor web dentro de la app. No necesita PC ni Termux.
+Compilar desde el celular: subir esta carpeta a GitHub (ver instrucciones) y descargar el APK de la pestana Actions.
+Si YouTube da 403: en app/build.gradle sube el numero de 'ytdl' a la ultima version de
+io.github.junkfood02.youtubedl-android (Maven Central) y vuelve a subir. Eso actualiza yt-dlp.

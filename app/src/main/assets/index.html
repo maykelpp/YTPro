@@ -1,0 +1,87 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101216"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icon.svg">
+<title>YT Downloader Pro</title>
+<style>
+:root{--bg:#101216;--panel:#181b21;--line:#2a2f39;--tx:#eef0f4;--mut:#8d95a6;--ac:#ff5a4f;--ok:#5fd68a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,"Segoe UI",Roboto,sans-serif}
+.w{max-width:860px;margin:auto;padding:0 16px 80px}
+h1{margin:0;padding-top:24px;font-size:1.7rem;letter-spacing:-.02em}h1 b{color:var(--ac)}h2{font-size:1.05rem;margin:26px 0 8px}
+.sub{color:var(--mut);margin:2px 0 14px}
+input,button,select,textarea{font:inherit;color:var(--tx)}
+textarea,input[type=text],select{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+textarea{width:100%;resize:vertical;min-height:48px}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}
+button.g{background:var(--panel);color:var(--tx);border:1px solid var(--line)}button.s{padding:6px 10px;font-size:.85rem}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.info{display:flex;gap:12px;align-items:center}.info img,.r img{width:128px;border-radius:8px;background:#000}.info div,.r div{min-width:0;flex:1}
+.info b,.r b{display:block;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+small,.mut{color:var(--mut)}.r{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.row{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;margin-top:10px}.row label{display:flex;gap:6px;align-items:center}
+.seg label{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 14px;cursor:pointer}
+.seg input{accent-color:var(--ac)}input[type=text].t{width:84px}
+.pb{height:6px;background:var(--line);border-radius:3px;margin:8px 0 4px;overflow:hidden}.pb i{display:block;height:100%;background:var(--ac)}
+.done .pb i{background:var(--ok)}.err{color:#ff8a80}.jt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+details summary{cursor:pointer;color:var(--mut);margin-top:10px}
+dialog img{max-width:90vw;max-height:70vh}
+dialog{background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:14px;max-width:96vw;padding:12px}
+dialog video,dialog audio{max-width:90vw;max-height:70vh;width:720px}::backdrop{background:#000a}
+</style></head><body><div class="w">
+<h1>YT Downloader <b>Pro</b></h1><p class="sub">Pega uno o varios links (uno por línea) o escribe lo que buscas.</p>
+<textarea id="u" rows="2" placeholder="https://youtu.be/…   o   artista - canción"></textarea>
+<div class="bar"><button onclick="analyze()">Analizar</button><button class="g" onclick="paste()">Pegar</button><button class="g" onclick="quick('video')">MP4 directo</button><button class="g" onclick="quick('audio')">MP3 directo</button></div>
+<div id="res"></div><div id="opt"></div>
+<h2>Descargas</h2><div id="jobs"><p class="mut">Aquí verás el progreso.</p></div>
+<h2>Biblioteca</h2><div id="lib"></div></div>
+<dialog id="pv"><div id="pvb"></div><div class="row"><button class="g" onclick="$('#pv').close();$('#pvb').innerHTML=''">Cerrar</button></div></dialog>
+<script>
+const $=s=>document.querySelector(s);let INFO=null,LIB=[],JL=[],R=[];
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json()}
+const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+const urls=()=>$('#u').value.split(/\s+/).filter(x=>/^https?:\/\//.test(x));
+const mb=n=>n>1e9?(n/1e9).toFixed(2)+' GB':(n/1e6).toFixed(1)+' MB';
+async function analyze(){const t=$('#u').value.trim();if(!t)return;$('#opt').innerHTML='';$('#res').innerHTML='<p class=mut>Analizando…</p>';
+ try{const u=urls();if(u.length){INFO=await post('/api/info',{url:u[0]});$('#res').innerHTML='';showOpt()}
+  else{R=await api('/api/search?q='+encodeURIComponent(t));$('#res').innerHTML=R.map((v,i)=>`<div class=r><img src="${v.thumb}" alt=""><div><b>${esc(v.title)}</b><small>${esc(v.channel)} · ${v.dur}</small></div><button class=s onclick="pick(${i})">Elegir</button></div>`).join('')||'<p class=mut>Sin resultados.</p>'}}
+ catch(e){$('#res').innerHTML='<p class=err>'+esc(e.message)+'</p>'}}
+async function pick(i){$('#u').value=R[i].url;$('#res').innerHTML='';analyze()}
+function showOpt(){const i=INFO;$('#opt').innerHTML=`<div class=card><div class=info><img src="${esc(i.thumb)}" alt=""><div><b>${esc(i.title)}</b><small>${esc(i.channel)} · ${i.dur}</small></div></div>
+<div class="row seg">${[['video','Video'],['audio','Solo audio'],['subs','Subtítulos'],['thumb','Miniatura']].map(([v,t],n)=>`<label><input type=radio name=k value=${v} ${n?'':'checked'} onchange=tog()> ${t}</label>`).join('')}</div>
+<div class=row id=vo><label>Calidad <select id=ql><option value="">Mejor disponible</option>${i.heights.map(h=>`<option value=${h}>${h}p</option>`).join('')}</select></label>
+<label><input type=checkbox id=h264 checked> Compatible (H.264)</label><label><input type=checkbox id=subs> Subtítulos incluidos</label></div>
+<div class=row id=ao hidden><label>Formato <select id=ac><option>mp3</option><option>m4a</option><option>opus</option><option>flac</option><option>wav</option></select></label>
+<label>Calidad <select id=abr><option>320</option><option selected>192</option><option>128</option></select> kbps</label><label><input type=checkbox id=norm> Normalizar volumen</label></div>
+<details id=adv><summary>Avanzado</summary>
+<div class=row id=avo><label><input type=checkbox id=sb> Quitar patrocinios e intros</label><label><input type=checkbox id=chap> Dividir por capítulos</label><label><input type=checkbox id=meta checked> Portada y metadatos</label></div>
+<div class=row><label>Límite de velocidad <select id=rate><option value="">Sin límite</option><option>500K</option><option>1M</option><option>2M</option><option>5M</option></select></label></div>
+${i.count>1?`<div class=row><label><input type=checkbox id=pl> Toda la lista (${i.count})</label><label>Elementos <input type=text class=t id=items placeholder="1-5,8" style="width:110px"></label></div>`:''}
+<div class=row><label>Recortar desde <input type=text class=t id=t0 placeholder="0:00"></label><label>hasta <input type=text class=t id=t1 placeholder="fin"></label></div></details>
+<div class=row><button onclick="start()">Descargar</button></div></div>`}
+const kind=()=>document.querySelector('input[name=k]:checked').value;
+function tog(){const k=kind();$('#vo').hidden=k!=='video';$('#ao').hidden=k!=='audio';$('#avo').hidden=!(k==='video'||k==='audio')}
+const ck=id=>$('#'+id)?.checked;
+async function start(){
+ await post('/api/download',{url:INFO.url,title:INFO.title,kind:kind(),height:$('#ql').value,h264:ck('h264'),subs:ck('subs'),acodec:$('#ac').value,abr:$('#abr').value,meta:ck('meta'),playlist:ck('pl'),items:$('#items')?.value||'',t0:$('#t0').value,t1:$('#t1').value,sb:ck('sb'),chapters:ck('chap'),norm:ck('norm'),rate:$('#rate').value});
+ $('#opt').innerHTML='';$('#u').value='';poll()}
+async function quick(k){const u=urls();if(!u.length){$('#res').innerHTML='<p class=err>Pega al menos un link.</p>';return}
+ for(const x of u)await post('/api/download',{url:x,kind:k,acodec:'mp3',abr:'192',h264:true,meta:true});$('#u').value='';poll()}
+async function poll(){const j=await api('/api/jobs');JL=j;let busy=false;
+ $('#jobs').innerHTML=j.map((x,i)=>{if(x.status==='queued'||x.status==='running')busy=true;
+  const act=x.status==='done'?x.files.map(f=>`<a href="/files/${encodeURIComponent(f)}?dl=1"><button class="s">Guardar ${esc(f.slice(0,28))}</button></a>`).join(' ')+` <button class="g s" onclick="rm('${x.id}')">Quitar</button>`
+   :x.status==='error'?`<button class="g s" onclick="rm('${x.id}')">Quitar</button>`:`<button class="g s" onclick="rm('${x.id}')">Cancelar</button>`;
+  return `<div class="card ${x.status}"><div class=jt>${esc(x.title)}</div><div class=pb><i style="width:${x.pct}%"></i></div>
+  <small class="${x.status==='error'?'err':''}">${esc(x.step)} ${x.status==='running'?x.pct+'%':''} ${esc(x.speed)} ${x.eta?'· '+esc(x.eta):''} ${esc(x.item)} ${x.status==='error'?esc(x.error):''}</small><div class=row>${act}</div></div>`}).join('')||'<p class=mut>Aquí verás el progreso.</p>';
+ if(busy)setTimeout(poll,1000);else loadLib()}
+async function rm(id){await api('/api/jobs/'+id,{method:'DELETE'});poll()}
+async function loadLib(){LIB=await api('/api/library');$('#lib').innerHTML=LIB.map((f,i)=>`<div class=r><div><b>${esc(f.name)}</b><small>${mb(f.size)}</small></div>
+ <button class="g s" onclick="pv(${i})">Ver</button><a href="/files/${encodeURIComponent(f.name)}?dl=1"><button class=s>Guardar</button></a><button class="g s" onclick="del(${i})">Borrar</button></div>`).join('')||'<p class=mut>Todavía no hay archivos.</p>'}
+function pv(i){const f=LIB[i],u='/files/'+encodeURIComponent(f.name);if(f.kind==='text'){window.open(u);return}$('#pvb').innerHTML=f.kind==='video'?`<video src="${u}" controls autoplay></video>`:f.kind==='image'?`<img src="${u}" alt="">`:`<audio src="${u}" controls autoplay></audio>`;$('#pv').showModal()}
+async function paste(){try{$('#u').value=await navigator.clipboard.readText();analyze()}catch(e){$('#res').innerHTML='<p class=err>Permite el portapapeles o pega el link a mano.</p>'}}
+async function del(i){if(!confirm('¿Borrar '+LIB[i].name+'?'))return;await api('/api/library?name='+encodeURIComponent(LIB[i].name),{method:'DELETE'});loadLib()}
+$('#u').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();analyze()}});
+(()=>{const q=new URLSearchParams(location.search),m=((q.get('u')||'')+' '+(q.get('v')||'')).match(/https?:\/\/\S+/);if(m){history.replaceState(null,'','/');$('#u').value=m[0];analyze()}})();
+poll();if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+</script></body></html>
