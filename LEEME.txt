@@ -1,4 +1,10 @@
-YT Pro (APK con servidor interno): yt-dlp + FFmpeg + servidor web dentro de la app. No necesita PC ni Termux.
-Compilar desde el celular: subir esta carpeta a GitHub (ver instrucciones) y descargar el APK de la pestana Actions.
-Si YouTube da 403: en app/build.gradle sube el numero de 'ytdl' a la ultima version de
-io.github.junkfood02.youtubedl-android (Maven Central) y vuelve a subir. Eso actualiza yt-dlp.
+YTPro — modo 100 % local
+
+El servidor NanoHTTPD, yt-dlp y FFmpeg se ejecutan dentro del teléfono.
+No requiere PC, Termux ni servidor remoto para funcionar. Internet sí es
+necesario para buscar y descargar contenido.
+
+Lee ARQUITECTURA_LOCAL.md para conocer la compatibilidad real de cada plataforma
+y las limitaciones de TikTok en esta integración Android.
+
+Compilación: GitHub Actions > Build APK > Artifacts > YTPro-apk.

@@ -100,6 +100,41 @@ object Backend {
     private fun clients(url: String, full: Boolean): List<String?> =
         if (!url.contains("youtu")) listOf(null) else if (full) CLIENTS else CLIENTS.take(4)
 
+    private fun platformOf(url: String): String {
+        val u = url.lowercase()
+        return when {
+            "tiktok.com" in u -> "TikTok"
+            "instagram.com" in u -> "Instagram"
+            "youtube.com" in u || "youtu.be" in u -> "YouTube"
+            "facebook.com" in u || "fb.watch" in u -> "Facebook"
+            "x.com" in u || "twitter.com" in u -> "X"
+            "reddit.com" in u || "redd.it" in u -> "Reddit"
+            else -> "sitio"
+        }
+    }
+
+    private fun explainExtractorError(url: String, raw: String): String {
+        val platform = platformOf(url)
+        val detail = raw.ifBlank { "Error desconocido del extractor" }
+        return when {
+            platform == "TikTok" &&
+                (detail.contains("impersonat", true) ||
+                 detail.contains("webpage video data", true) ||
+                 detail.contains("status code 0", true)) ->
+                "TikTok: el motor Android incluido no dispone de curl_cffi para la " +
+                "impersonacion TLS que este extractor necesita. No se corrige solo " +
+                "subiendo la version de la biblioteca. En modo 100% local esta URL " +
+                "puede no ser compatible. Detalle: $detail"
+            platform == "Instagram" ->
+                "Instagram: el contenido puede requerir inicio de sesion, ser privado " +
+                "o no estar disponible para el extractor local. Solo se admiten " +
+                "contenidos accesibles publicamente y permitidos. Detalle: $detail"
+            else -> "$platform: no se pudo extraer el contenido. Comprueba que el enlace " +
+                "sea publico, que tengas conexion y que el sitio siga siendo compatible. " +
+                "Detalle: $detail"
+        }.take(700)
+    }
+
     private fun playerClient(r: YoutubeDLRequest, cl: String?) {
         if (cl != null) r.addOption("--extractor-args", "youtube:player_client=$cl")
     }
@@ -224,7 +259,8 @@ object Backend {
                     .put("heights", JSONArray(hs.sortedDescending())).put("count", count)
             } catch (e: Exception) { err = e }
         }
-        throw err ?: Exception("No se pudo analizar el link")
+        val cause = err
+        throw Exception(explainExtractorError(url, cause?.message ?: "No se pudo analizar el link"), cause)
     }
 
     // ------------------------------------------------------------ descargas
@@ -351,12 +387,12 @@ object Backend {
                 if (firstErr == null) firstErr = "No se genero ningun archivo"
             } catch (e: Exception) {
                 if (job.cancel) break
-                if (firstErr == null) firstErr = (e.message ?: e.toString()).take(200)
+                if (firstErr == null) firstErr = explainExtractorError(job.url, e.message ?: e.toString())
             }
         }
         tmp.deleteRecursively()
         job.step = if (job.cancel) "Cancelado" else "Error"
-        job.error = if (job.cancel) "Cancelado" else (firstErr ?: "Error") + "  -> Sube la version de youtubedl-android en app/build.gradle y recompila."
+        job.error = if (job.cancel) "Cancelado" else (firstErr ?: explainExtractorError(job.url, "No se genero ningun archivo"))
         job.status = "error"
     }
 
