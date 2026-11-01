@@ -113,7 +113,7 @@ object Backend {
         if (verCache.isNotEmpty()) return verCache
         return try {
             // API documentada por youtubedl-android: versionName(Context).
-            YoutubeDL.getInstance().versionName(appCtx).also { verCache = it }
+            (YoutubeDL.getInstance().versionName(appCtx) ?: "?").also { verCache = it }
         } catch (e: Throwable) {
             android.util.Log.w("YTPro", "No se pudo consultar la versión de yt-dlp", e)
             "?"
