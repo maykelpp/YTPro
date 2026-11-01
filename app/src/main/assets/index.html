@@ -1,87 +1,186 @@
 <!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101216"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icon.svg">
-<title>YT Downloader Pro</title>
+<meta name="theme-color" content="#05060f"><title>YT Pro</title>
 <style>
-:root{--bg:#101216;--panel:#181b21;--line:#2a2f39;--tx:#eef0f4;--mut:#8d95a6;--ac:#ff5a4f;--ok:#5fd68a}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,"Segoe UI",Roboto,sans-serif}
-.w{max-width:860px;margin:auto;padding:0 16px 80px}
-h1{margin:0;padding-top:24px;font-size:1.7rem;letter-spacing:-.02em}h1 b{color:var(--ac)}h2{font-size:1.05rem;margin:26px 0 8px}
-.sub{color:var(--mut);margin:2px 0 14px}
-input,button,select,textarea{font:inherit;color:var(--tx)}
-textarea,input[type=text],select{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-textarea{width:100%;resize:vertical;min-height:48px}
-button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}
-button.g{background:var(--panel);color:var(--tx);border:1px solid var(--line)}button.s{padding:6px 10px;font-size:.85rem}
-:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
-.bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
-.info{display:flex;gap:12px;align-items:center}.info img,.r img{width:128px;border-radius:8px;background:#000}.info div,.r div{min-width:0;flex:1}
-.info b,.r b{display:block;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-small,.mut{color:var(--mut)}.r{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
-.row{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;margin-top:10px}.row label{display:flex;gap:6px;align-items:center}
-.seg label{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 14px;cursor:pointer}
-.seg input{accent-color:var(--ac)}input[type=text].t{width:84px}
-.pb{height:6px;background:var(--line);border-radius:3px;margin:8px 0 4px;overflow:hidden}.pb i{display:block;height:100%;background:var(--ac)}
-.done .pb i{background:var(--ok)}.err{color:#ff8a80}.jt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-details summary{cursor:pointer;color:var(--mut);margin-top:10px}
-dialog img{max-width:90vw;max-height:70vh}
-dialog{background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:14px;max-width:96vw;padding:12px}
-dialog video,dialog audio{max-width:90vw;max-height:70vh;width:720px}::backdrop{background:#000a}
-</style></head><body><div class="w">
-<h1>YT Downloader <b>Pro</b></h1><p class="sub">Pega uno o varios links (uno por línea) o escribe lo que buscas.</p>
-<textarea id="u" rows="2" placeholder="https://youtu.be/…   o   artista - canción"></textarea>
-<div class="bar"><button onclick="analyze()">Analizar</button><button class="g" onclick="paste()">Pegar</button><button class="g" onclick="quick('video')">MP4 directo</button><button class="g" onclick="quick('audio')">MP3 directo</button></div>
-<div id="res"></div><div id="opt"></div>
-<h2>Descargas</h2><div id="jobs"><p class="mut">Aquí verás el progreso.</p></div>
-<h2>Biblioteca</h2><div id="lib"></div></div>
-<dialog id="pv"><div id="pvb"></div><div class="row"><button class="g" onclick="$('#pv').close();$('#pvb').innerHTML=''">Cerrar</button></div></dialog>
+:root{--bg:#05060f;--acc:#00e5ff;--acc2:#8a5cff;--tx:#eaf0ff;--mut:#8a93b8;--line:rgba(255,255,255,.1);--gl:rgba(255,255,255,.055);--ok:#3dffa0;--bad:#ff5d73}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 "Segoe UI",system-ui,Roboto,sans-serif}
+.bg{position:fixed;inset:0;z-index:-1;background:radial-gradient(60% 40% at 15% 0%,color-mix(in srgb,var(--acc) 22%,transparent),transparent 70%),radial-gradient(50% 40% at 100% 20%,color-mix(in srgb,var(--acc2) 24%,transparent),transparent 70%),linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px) 0 0/100% 34px,linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px) 0 0/34px 100%}
+@media(prefers-reduced-motion:no-preference){body:not(.rm) .bg{animation:drift 18s ease-in-out infinite alternate}@keyframes drift{to{filter:hue-rotate(25deg)}}}
+.top{display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 18px 6px}
+.logo{font-weight:800;letter-spacing:.18em;font-size:1.05rem}.logo b{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.chip{font-size:.72rem;padding:5px 10px;border:1px solid var(--line);border-radius:99px;background:var(--gl);color:var(--mut)}
+.chip.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 50%,transparent)}.chip.warn{color:#ffb02e}
+main{padding:6px 16px calc(96px + env(safe-area-inset-bottom));max-width:720px;margin:auto}
+.view{display:none}.view.on{display:block}
+.gl{background:var(--gl);border:1px solid var(--line);border-radius:20px;padding:16px;margin:12px 0;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+h2{font-size:.78rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);margin:20px 4px 8px;font-weight:700}
+textarea,input[type=text],select{width:100%;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:14px;padding:12px 14px;color:var(--tx);font:inherit;outline:none}
+textarea{min-height:76px;resize:none}textarea:focus,input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 22%,transparent)}
+button{font:inherit;color:var(--tx);border:0;border-radius:14px;padding:11px 16px;font-weight:700;cursor:pointer;background:var(--gl);border:1px solid var(--line)}
+button.neon{background:linear-gradient(120deg,var(--acc),var(--acc2));color:#041018;border:0;box-shadow:0 0 22px color-mix(in srgb,var(--acc) 45%,transparent)}
+button:active{transform:scale(.97)}button.s{padding:7px 12px;font-size:.82rem;border-radius:11px}button.bad{color:var(--bad)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}.row>.grow{flex:1}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:4px 0;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
+.ch{position:relative;flex:none}.ch input{position:absolute;opacity:0;inset:0}
+.ch span,.pre{display:block;padding:8px 14px;border-radius:99px;border:1px solid var(--line);background:var(--gl);font-weight:600;font-size:.86rem;white-space:nowrap;cursor:pointer}
+.ch input:checked+span{background:linear-gradient(120deg,var(--acc),var(--acc2));color:#041018;border-color:transparent;box-shadow:0 0 14px color-mix(in srgb,var(--acc) 40%,transparent)}
+.ch input:focus-visible+span{outline:2px solid var(--acc);outline-offset:2px}
+.tg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line)}.tg:last-child{border:0}
+.tg small{display:block;color:var(--mut);font-size:.78rem}
+.tg input{display:none}.tg i{flex:none;width:46px;height:26px;border-radius:99px;background:rgba(255,255,255,.14);position:relative;transition:.2s}
+.tg i:after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s}
+.tg input:checked+i{background:linear-gradient(120deg,var(--acc),var(--acc2))}.tg input:checked+i:after{transform:translateX(20px)}
+.lbl{font-size:.74rem;color:var(--mut);letter-spacing:.12em;text-transform:uppercase;margin:14px 2px 6px}
+.res{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}.res:last-child{border:0}
+.res img,.info img{width:112px;aspect-ratio:16/9;object-fit:cover;border-radius:12px;background:#000}.res div,.info div{min-width:0;flex:1}
+.t2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:600}
+small,.mut{color:var(--mut)}.info{display:flex;gap:12px;align-items:center}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:rgba(0,0,0,.3);padding:5px;border-radius:16px}
+.seg label{position:relative;text-align:center}.seg input{position:absolute;opacity:0;inset:0}
+.seg span{display:block;padding:9px 4px;border-radius:12px;font-weight:700;font-size:.84rem;cursor:pointer;color:var(--mut)}
+.seg input:checked+span{background:linear-gradient(120deg,var(--acc),var(--acc2));color:#041018}
+details summary{cursor:pointer;color:var(--acc);font-weight:700;margin:14px 2px 4px}
+.job{display:flex;gap:14px;align-items:center}
+.ring{--p:0;flex:none;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--acc) calc(var(--p)*1%),rgba(255,255,255,.1) 0);position:relative;font-size:.78rem;font-weight:800}
+.ring:before{content:"";position:absolute;inset:5px;border-radius:50%;background:#0a0c1c}.ring span{position:relative}
+.job.done .ring{background:conic-gradient(var(--ok) 100%,transparent 0)}.job.error .ring{background:conic-gradient(var(--bad) 100%,transparent 0)}
+.job>div{min-width:0;flex:1}.err{color:var(--bad);font-size:.82rem;word-break:break-word}
+.dock{position:fixed;left:14px;right:14px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:520px;margin:auto;display:flex;justify-content:space-around;padding:8px;border-radius:24px;background:rgba(12,14,30,.72);border:1px solid var(--line);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.dock button{background:none;border:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 14px;font-size:.68rem;color:var(--mut);position:relative;border-radius:16px}
+.dock svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.dock button.on{color:var(--acc);background:color-mix(in srgb,var(--acc) 12%,transparent)}
+.dock b{position:absolute;top:2px;right:8px;min-width:17px;height:17px;border-radius:9px;background:var(--acc2);color:#fff;font-size:.65rem;display:none;place-items:center;padding:0 4px}
+.sw{display:flex;gap:10px}.sw button{width:38px;height:38px;border-radius:50%;padding:0;border:2px solid transparent}.sw button.on{border-color:#fff}
+.k{flex:none;width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-weight:800;font-size:.7rem;background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 30%,transparent),color-mix(in srgb,var(--acc2) 30%,transparent))}
+dialog{background:#0a0c1c;color:var(--tx);border:1px solid var(--line);border-radius:20px;padding:12px;max-width:96vw}dialog video,dialog audio{width:min(92vw,680px);max-height:70vh}dialog img{max-width:90vw;max-height:70vh}::backdrop{background:#000b}
+</style></head><body>
+<div class="bg"></div>
+<div class="top"><div class="logo">YT<b>PRO</b></div><div class="chip" id="eng">Motor: iniciando…</div></div>
+<main>
+<section class="view on" id="v-home">
+ <div class="gl"><textarea id="u" placeholder="Pega un link (YouTube, TikTok, Instagram…) o escribe para buscar"></textarea>
+  <div class="row"><button class="neon grow" onclick="analyze()">Analizar</button><button onclick="paste()">Pegar</button><button onclick="$('#u').value='';$('#res').innerHTML='';$('#opt').innerHTML=''">Limpiar</button></div>
+  <div class="lbl">Descarga directa (todos los links pegados)</div>
+  <div class="chips" id="pre"></div></div>
+ <div id="res"></div><div id="opt"></div>
+</section>
+<section class="view" id="v-dl"><h2>Descargas</h2><div id="jobs"></div></section>
+<section class="view" id="v-lib"><h2>Biblioteca</h2>
+ <div class="gl"><input type="text" id="lq" placeholder="Buscar en tu biblioteca" oninput="drawLib()">
+ <div class="chips" style="margin-top:8px" id="lf"></div><small id="lsum" class="mut"></small></div><div id="lib"></div></section>
+<section class="view" id="v-set"><h2>Apariencia</h2><div class="gl"><div class="lbl" style="margin-top:0">Color neón</div><div class="sw" id="sw"></div>
+ <label class="tg"><span>Reducir animaciones<small>Menos movimiento y menos batería</small></span><input type="checkbox" id="s-rm" onchange="setP('rm',this.checked)"><i></i></label></div>
+ <h2>Descargas</h2><div class="gl"><div class="lbl" style="margin-top:0">Descargas simultáneas</div><div class="chips" id="s-par"></div>
+ <div class="lbl">Guardar en</div><div class="chips" id="s-dest"></div>
+ <label class="tg"><span>Solo con WiFi<small>No descarga con datos móviles</small></span><input type="checkbox" id="s-wifi" onchange="setS('wifi',this.checked)"><i></i></label>
+ <label class="tg"><span>Modo anti-bloqueo<small>Descarga en trozos: más lento, evita errores 403</small></span><input type="checkbox" id="s-anti" onchange="setS('anti',this.checked)"><i></i></label>
+ <label class="tg"><span>Vibrar al terminar<small>Aviso cuando acaba una descarga</small></span><input type="checkbox" id="s-vib" onchange="setP('vib',this.checked)"><i></i></label></div>
+ <h2>Valores por defecto</h2><div class="gl"><div class="lbl" style="margin-top:0">Tipo</div><div class="chips" id="d-kind"></div>
+ <div class="lbl">Calidad de video</div><div class="chips" id="d-h"></div>
+ <div class="lbl">Formato de audio</div><div class="chips" id="d-ac"></div>
+ <div class="lbl">Calidad de audio (kbps)</div><div class="chips" id="d-abr"></div>
+ <div class="lbl">Nombre del archivo</div><div class="chips" id="d-tpl"></div>
+ <div class="lbl">Idiomas de subtítulos</div><input type="text" id="d-langs" oninput="setP('langs',this.value)" placeholder="es,en"></div>
+ <h2>Motor yt-dlp</h2><div class="gl"><div class="info"><div><b id="ver">—</b><small id="vmsg" class="mut">Actualízalo si una página deja de funcionar.</small></div></div>
+ <div class="row"><button class="neon grow" onclick="upd()">Actualizar yt-dlp ahora</button></div>
+ <label class="tg"><span>Actualizar solo cada día<small>Al abrir la app, una vez al día</small></span><input type="checkbox" id="s-au" onchange="setS('autoUpdate',this.checked)"><i></i></label></div>
+ <p class="mut" style="font-size:.8rem;padding:0 6px">Los videos van a Películas/YTPro, el audio a Música/YTPro y las imágenes a Imágenes/YTPro, así aparecen en tu galería y tu reproductor de música.</p>
+</section>
+</main>
+<nav class="dock" id="dock"></nav>
+<dialog id="pv"><div id="pvb"></div><div class="row"><button onclick="closePv()">Cerrar</button></div></dialog>
 <script>
-const $=s=>document.querySelector(s);let INFO=null,LIB=[],JL=[],R=[];
+const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let P={acc:0,kind:'video',h:'',ac:'mp3',abr:'192',langs:'es,en',tpl:'title',rm:false,vib:true},S={parallel:2,dest:'media'},INFO=null,R=[],LIB=[],JOBS=[],LF='all',seen={},view='home';
+try{Object.assign(P,JSON.parse(localStorage.getItem('ytp')||'{}'))}catch(e){}
+const saveP=()=>{try{localStorage.setItem('ytp',JSON.stringify(P))}catch(e){}};
+const ACC=[['Cian','#00e5ff','#8a5cff'],['Lima','#3dffa0','#00b3ff'],['Rosa','#ff4fd8','#7a5cff'],['Ámbar','#ffb02e','#ff4f5e'],['Hielo','#7aa2ff','#00e5ff']];
+function theme(){const a=ACC[P.acc]||ACC[0],r=document.documentElement.style;r.setProperty('--acc',a[1]);r.setProperty('--acc2',a[2]);document.body.classList.toggle('rm',!!P.rm)}
+function setP(k,v){P[k]=v;saveP();theme();if(k==='acc')drawSet()}
 async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json()}
 const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+async function setS(k,v){S=await post('/api/settings',{[k]:v});drawSet()}
 const urls=()=>$('#u').value.split(/\s+/).filter(x=>/^https?:\/\//.test(x));
 const mb=n=>n>1e9?(n/1e9).toFixed(2)+' GB':(n/1e6).toFixed(1)+' MB';
-async function analyze(){const t=$('#u').value.trim();if(!t)return;$('#opt').innerHTML='';$('#res').innerHTML='<p class=mut>Analizando…</p>';
+const chips=(name,items,cur,fn)=>items.map(([v,t])=>`<label class=ch><input type=radio name="${name}" value="${v}" ${String(cur)===String(v)?'checked':''} onchange="${fn}('${v}')"><span>${t}</span></label>`).join('');
+const dockIcons={home:'<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',dl:'<path d="M12 3v12m0 0l-5-5m5 5l5-5M4 20h16"/>',lib:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',set:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'};
+function drawDock(){$('#dock').innerHTML=[['home','Inicio'],['dl','Descargas'],['lib','Biblioteca'],['set','Ajustes']].map(([v,t])=>`<button class="${view===v?'on':''}" onclick="go('${v}')" aria-label="${t}"><svg viewBox="0 0 24 24">${dockIcons[v]}</svg>${t}${v==='dl'?'<b id=bd></b>':''}</button>`).join('');badge()}
+function badge(){const n=JOBS.filter(j=>j.status==='running'||j.status==='queued').length,b=$('#bd');if(b){b.textContent=n;b.style.display=n?'grid':'none'}}
+function go(v){view=v;document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));drawDock();if(v==='lib')loadLib();if(v==='set')loadSet();window.scrollTo(0,0)}
+window.goBack=()=>{if($('#pv').open){closePv();return true}if(view!=='home'){go('home');return true}return false};
+// ---------- Inicio
+const PRE=[['mp3','MP3 320',{kind:'audio',acodec:'mp3',abr:'320'}],['m4a','M4A',{kind:'audio',acodec:'m4a',abr:'256'}],['v720','MP4 720p',{kind:'video',height:'720'}],['v1080','MP4 1080p',{kind:'video',height:'1080'}],['vmax','MP4 máx.',{kind:'video',height:''}],['subs','Subtítulos',{kind:'subs'}],['thumb','Miniatura',{kind:'thumb'}]];
+function drawPre(){$('#pre').innerHTML=PRE.map(([i,t])=>`<button class="pre" onclick="quick('${i}')">${t}</button>`).join('')}
+async function quick(id){const u=urls();if(!u.length){$('#res').innerHTML='<div class=gl><span class=err>Pega al menos un link para usar la descarga directa.</span></div>';return}
+ const o=PRE.find(p=>p[0]===id)[2];let ok=0,bad='';
+ for(const x of u){try{await post('/api/download',{url:x,h264:true,meta:true,sublangs:P.langs,tpl:P.tpl,...o});ok++}catch(e){bad=e.message}}
+ $('#u').value='';$('#res').innerHTML=bad?`<div class=gl><span class=err>${esc(bad)}</span></div>`:'';if(ok){go('dl');poll()}}
+async function analyze(){const t=$('#u').value.trim();if(!t)return;$('#opt').innerHTML='';$('#res').innerHTML='<div class=gl><span class=mut>Analizando…</span></div>';
  try{const u=urls();if(u.length){INFO=await post('/api/info',{url:u[0]});$('#res').innerHTML='';showOpt()}
-  else{R=await api('/api/search?q='+encodeURIComponent(t));$('#res').innerHTML=R.map((v,i)=>`<div class=r><img src="${v.thumb}" alt=""><div><b>${esc(v.title)}</b><small>${esc(v.channel)} · ${v.dur}</small></div><button class=s onclick="pick(${i})">Elegir</button></div>`).join('')||'<p class=mut>Sin resultados.</p>'}}
- catch(e){$('#res').innerHTML='<p class=err>'+esc(e.message)+'</p>'}}
-async function pick(i){$('#u').value=R[i].url;$('#res').innerHTML='';analyze()}
-function showOpt(){const i=INFO;$('#opt').innerHTML=`<div class=card><div class=info><img src="${esc(i.thumb)}" alt=""><div><b>${esc(i.title)}</b><small>${esc(i.channel)} · ${i.dur}</small></div></div>
-<div class="row seg">${[['video','Video'],['audio','Solo audio'],['subs','Subtítulos'],['thumb','Miniatura']].map(([v,t],n)=>`<label><input type=radio name=k value=${v} ${n?'':'checked'} onchange=tog()> ${t}</label>`).join('')}</div>
-<div class=row id=vo><label>Calidad <select id=ql><option value="">Mejor disponible</option>${i.heights.map(h=>`<option value=${h}>${h}p</option>`).join('')}</select></label>
-<label><input type=checkbox id=h264 checked> Compatible (H.264)</label><label><input type=checkbox id=subs> Subtítulos incluidos</label></div>
-<div class=row id=ao hidden><label>Formato <select id=ac><option>mp3</option><option>m4a</option><option>opus</option><option>flac</option><option>wav</option></select></label>
-<label>Calidad <select id=abr><option>320</option><option selected>192</option><option>128</option></select> kbps</label><label><input type=checkbox id=norm> Normalizar volumen</label></div>
-<details id=adv><summary>Avanzado</summary>
-<div class=row id=avo><label><input type=checkbox id=sb> Quitar patrocinios e intros</label><label><input type=checkbox id=chap> Dividir por capítulos</label><label><input type=checkbox id=meta checked> Portada y metadatos</label></div>
-<div class=row><label>Límite de velocidad <select id=rate><option value="">Sin límite</option><option>500K</option><option>1M</option><option>2M</option><option>5M</option></select></label></div>
-${i.count>1?`<div class=row><label><input type=checkbox id=pl> Toda la lista (${i.count})</label><label>Elementos <input type=text class=t id=items placeholder="1-5,8" style="width:110px"></label></div>`:''}
-<div class=row><label>Recortar desde <input type=text class=t id=t0 placeholder="0:00"></label><label>hasta <input type=text class=t id=t1 placeholder="fin"></label></div></details>
-<div class=row><button onclick="start()">Descargar</button></div></div>`}
-const kind=()=>document.querySelector('input[name=k]:checked').value;
-function tog(){const k=kind();$('#vo').hidden=k!=='video';$('#ao').hidden=k!=='audio';$('#avo').hidden=!(k==='video'||k==='audio')}
-const ck=id=>$('#'+id)?.checked;
-async function start(){
- await post('/api/download',{url:INFO.url,title:INFO.title,kind:kind(),height:$('#ql').value,h264:ck('h264'),subs:ck('subs'),acodec:$('#ac').value,abr:$('#abr').value,meta:ck('meta'),playlist:ck('pl'),items:$('#items')?.value||'',t0:$('#t0').value,t1:$('#t1').value,sb:ck('sb'),chapters:ck('chap'),norm:ck('norm'),rate:$('#rate').value});
- $('#opt').innerHTML='';$('#u').value='';poll()}
-async function quick(k){const u=urls();if(!u.length){$('#res').innerHTML='<p class=err>Pega al menos un link.</p>';return}
- for(const x of u)await post('/api/download',{url:x,kind:k,acodec:'mp3',abr:'192',h264:true,meta:true});$('#u').value='';poll()}
-async function poll(){const j=await api('/api/jobs');JL=j;let busy=false;
- $('#jobs').innerHTML=j.map((x,i)=>{if(x.status==='queued'||x.status==='running')busy=true;
-  const act=x.status==='done'?x.files.map(f=>`<a href="/files/${encodeURIComponent(f)}?dl=1"><button class="s">Guardar ${esc(f.slice(0,28))}</button></a>`).join(' ')+` <button class="g s" onclick="rm('${x.id}')">Quitar</button>`
-   :x.status==='error'?`<button class="g s" onclick="rm('${x.id}')">Quitar</button>`:`<button class="g s" onclick="rm('${x.id}')">Cancelar</button>`;
-  return `<div class="card ${x.status}"><div class=jt>${esc(x.title)}</div><div class=pb><i style="width:${x.pct}%"></i></div>
-  <small class="${x.status==='error'?'err':''}">${esc(x.step)} ${x.status==='running'?x.pct+'%':''} ${esc(x.speed)} ${x.eta?'· '+esc(x.eta):''} ${esc(x.item)} ${x.status==='error'?esc(x.error):''}</small><div class=row>${act}</div></div>`}).join('')||'<p class=mut>Aquí verás el progreso.</p>';
- if(busy)setTimeout(poll,1000);else loadLib()}
-async function rm(id){await api('/api/jobs/'+id,{method:'DELETE'});poll()}
-async function loadLib(){LIB=await api('/api/library');$('#lib').innerHTML=LIB.map((f,i)=>`<div class=r><div><b>${esc(f.name)}</b><small>${mb(f.size)}</small></div>
- <button class="g s" onclick="pv(${i})">Ver</button><a href="/files/${encodeURIComponent(f.name)}?dl=1"><button class=s>Guardar</button></a><button class="g s" onclick="del(${i})">Borrar</button></div>`).join('')||'<p class=mut>Todavía no hay archivos.</p>'}
-function pv(i){const f=LIB[i],u='/files/'+encodeURIComponent(f.name);if(f.kind==='text'){window.open(u);return}$('#pvb').innerHTML=f.kind==='video'?`<video src="${u}" controls autoplay></video>`:f.kind==='image'?`<img src="${u}" alt="">`:`<audio src="${u}" controls autoplay></audio>`;$('#pv').showModal()}
-async function paste(){try{$('#u').value=await navigator.clipboard.readText();analyze()}catch(e){$('#res').innerHTML='<p class=err>Permite el portapapeles o pega el link a mano.</p>'}}
-async function del(i){if(!confirm('¿Borrar '+LIB[i].name+'?'))return;await api('/api/library?name='+encodeURIComponent(LIB[i].name),{method:'DELETE'});loadLib()}
-$('#u').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();analyze()}});
-(()=>{const q=new URLSearchParams(location.search),m=((q.get('u')||'')+' '+(q.get('v')||'')).match(/https?:\/\/\S+/);if(m){history.replaceState(null,'','/');$('#u').value=m[0];analyze()}})();
-poll();if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  else{R=await api('/api/search?q='+encodeURIComponent(t));$('#res').innerHTML='<div class=gl>'+(R.map((v,i)=>`<div class=res><img src="${v.thumb}" alt=""><div><div class=t2>${esc(v.title)}</div><small>${esc(v.channel)} · ${v.dur}</small></div><button class="s neon" onclick="pick(${i})">Elegir</button></div>`).join('')||'<span class=mut>Sin resultados.</span>')+'</div>'}}
+ catch(e){$('#res').innerHTML=`<div class=gl><span class=err>${esc(e.message)}</span></div>`}}
+function pick(i){$('#u').value=R[i].url;analyze()}
+async function paste(){try{$('#u').value=await navigator.clipboard.readText();analyze()}catch(e){$('#res').innerHTML='<div class=gl><span class=err>Mantén pulsado el cuadro y elige Pegar.</span></div>'}}
+const T=(id,t,sub,on)=>`<label class=tg><span>${t}${sub?`<small>${sub}</small>`:''}</span><input type=checkbox id="${id}" ${on?'checked':''}><i></i></label>`;
+function showOpt(){const i=INFO,hs=[['','Mejor'],...i.heights.map(h=>[h,h+'p'])];
+ $('#opt').innerHTML=`<div class=gl><div class=info><img src="${esc(i.thumb)}" alt=""><div><div class=t2>${esc(i.title)}</div><small>${esc(i.channel)} · ${i.dur}</small></div></div>
+<div class=seg style="margin-top:14px">${[['video','Video'],['audio','Audio'],['subs','Subs'],['thumb','Imagen']].map(([v,t])=>`<label><input type=radio name=k value=${v} ${P.kind===v?'checked':''} onchange="tog()"><span>${t}</span></label>`).join('')}</div>
+<div id=vo><div class=lbl>Calidad</div><div class=chips>${chips('q',hs,P.h,'setQ')}</div>
+<div class=lbl>Contenedor</div><div class=chips>${chips('ct',[['mp4','MP4'],['mkv','MKV']],'mp4','setCt')}</div>
+${T('h264','Compatible con todos los reproductores','H.264 + AAC',true)}${T('subs','Incluir subtítulos','Idiomas: '+esc(P.langs),false)}</div>
+<div id=ao hidden><div class=lbl>Formato</div><div class=chips>${chips('ac',[['mp3','MP3'],['m4a','M4A'],['opus','OPUS'],['flac','FLAC'],['wav','WAV']],P.ac,'setAc')}</div>
+<div class=lbl>Calidad (kbps)</div><div class=chips>${chips('abr',[['320','320'],['256','256'],['192','192'],['128','128']],P.abr,'setAbr')}</div>${T('norm','Normalizar volumen','Mismo nivel en todas tus canciones',false)}</div>
+<details><summary>Opciones avanzadas</summary><div id=avo>${T('meta','Portada y datos de la canción','Se incrusta en el archivo',true)}${T('sb','Quitar patrocinios e intros','SponsorBlock',false)}${T('chap','Dividir por capítulos','Un archivo por capítulo',false)}</div>
+<div class=lbl>Límite de velocidad</div><div class=chips>${chips('rt',[['','Sin límite'],['500K','500 KB/s'],['1M','1 MB/s'],['2M','2 MB/s'],['5M','5 MB/s']],'','setRt')}</div>
+<div class=lbl>Nombre del archivo</div><div class=chips>${chips('tp',[['title','Título'],['channel','Canal - Título'],['date','Fecha - Título']],P.tpl,'setTp')}</div>
+${i.count>1?`${T('pl','Descargar toda la lista ('+i.count+')','',false)}<div class=lbl>Elementos (ej. 1-5,8)</div><input type=text id=items placeholder="vacío = todos">`:''}
+<div class=lbl>Recortar (mm:ss)</div><div class=row><input type=text id=t0 placeholder="inicio" style="flex:1"><input type=text id=t1 placeholder="fin" style="flex:1"></div></details>
+<div class=row><button class="neon grow" style="padding:15px" onclick="start()">DESCARGAR</button></div></div>`;tog()}
+let CUR={q:P.h,ct:'mp4',rt:''};
+const setQ=v=>{CUR.q=v;P.h=v;saveP()},setCt=v=>CUR.ct=v,setRt=v=>CUR.rt=v,setAc=v=>{P.ac=v;saveP()},setAbr=v=>{P.abr=v;saveP()},setTp=v=>{P.tpl=v;saveP()};
+const kind=()=>document.querySelector('input[name=k]:checked').value,ck=id=>$('#'+id)?.checked;
+function tog(){const k=kind();P.kind=k;saveP();$('#vo').hidden=k!=='video';$('#ao').hidden=k!=='audio';$('#avo').hidden=!(k==='video'||k==='audio')}
+async function start(){try{await post('/api/download',{url:INFO.url,title:INFO.title,kind:kind(),height:CUR.q,container:CUR.ct,h264:ck('h264'),subs:ck('subs'),sublangs:P.langs,acodec:P.ac,abr:P.abr,norm:ck('norm'),meta:ck('meta'),sb:ck('sb'),chapters:ck('chap'),rate:CUR.rt,tpl:P.tpl,playlist:ck('pl'),items:$('#items')?.value||'',t0:$('#t0').value,t1:$('#t1').value});
+ $('#opt').innerHTML='';$('#u').value='';go('dl');poll()}catch(e){alert(e.message)}}
+// ---------- Descargas
+async function poll(){try{JOBS=await api('/api/jobs')}catch(e){return}let busy=false;
+ for(const j of JOBS){if(j.status==='queued'||j.status==='running')busy=true;if(j.status==='done'&&!seen[j.id]){seen[j.id]=1;if(P.vib&&navigator.vibrate)navigator.vibrate([90,50,90]);loadLib()}}
+ badge();$('#jobs').innerHTML=JOBS.map((j,i)=>{const act=j.status==='done'?j.files.map(f=>`<button class=s onclick="Android.open('${f.id}')">Abrir</button><button class=s onclick="Android.share('${f.id}')">Compartir</button>`).join('')+`<button class="s" onclick="rm('${j.id}')">Quitar</button>`
+  :j.status==='error'?`<button class="s neon" onclick="retry(${i})">Reintentar</button><button class="s" onclick="rm('${j.id}')">Quitar</button>`:`<button class="s bad" onclick="rm('${j.id}')">Cancelar</button>`;
+  return `<div class="gl job ${j.status}"><div class=ring style="--p:${j.pct}"><span>${j.status==='done'?'✓':j.status==='error'?'!':Math.round(j.pct)+'%'}</span></div><div><div class=t2>${esc(j.title)}</div>
+  <small class="${j.status==='error'?'err':'mut'}">${esc(j.step)} ${esc(j.speed)} ${j.eta?'· '+esc(j.eta):''}</small>${j.error?`<div class=err>${esc(j.error)}</div>`:''}<div class=row>${act}</div></div></div>`}).join('')||'<div class=gl><span class=mut>No hay descargas todavía.</span></div>';
+ if(busy)setTimeout(poll,1000)}
+const rm=async id=>{await api('/api/jobs/'+id,{method:'DELETE'});poll()};
+async function retry(i){const j=JOBS[i];await post('/api/download',{url:j.url,title:j.title,...j.opts});await rm(j.id)}
+// ---------- Biblioteca
+const KL={video:'VID',audio:'MP3',image:'IMG',text:'SRT'};
+async function loadLib(){try{LIB=await api('/api/library');drawLib()}catch(e){}}
+function drawLib(){const q=($('#lq').value||'').toLowerCase();$('#lf').innerHTML=chips('lf',[['all','Todo'],['video','Video'],['audio','Audio'],['image','Imágenes'],['text','Subs']],LF,'setLf');
+ const l=LIB.filter(f=>(LF==='all'||f.kind===LF)&&f.name.toLowerCase().includes(q));$('#lsum').textContent=l.length+' archivos · '+mb(l.reduce((a,f)=>a+f.size,0));
+ $('#lib').innerHTML=l.map(f=>`<div class="gl job"><div class=k>${KL[f.kind]||'FILE'}</div><div><div class=t2>${esc(f.name)}</div><small>${mb(f.size)}</small>
+ <div class=row>${f.kind!=='text'?`<button class=s onclick="pv('${f.id}')">Reproducir</button>`:''}<button class=s onclick="Android.open('${f.id}')">Abrir con…</button><button class=s onclick="Android.share('${f.id}')">Compartir</button><button class="s bad" onclick="del('${f.id}')">Borrar</button></div></div></div>`).join('')||'<div class=gl><span class=mut>Nada por aquí todavía.</span></div>'}
+const setLf=v=>{LF=v;drawLib()};
+function pv(id){const f=LIB.find(x=>x.id===id),u='/files/'+id;$('#pvb').innerHTML=f.kind==='video'?`<video src="${u}" controls autoplay playsinline></video>`:f.kind==='image'?`<img src="${u}" alt="">`:`<audio src="${u}" controls autoplay></audio>`;$('#pv').showModal()}
+function closePv(){$('#pv').close();$('#pvb').innerHTML=''}
+async function del(id){if(!confirm('¿Borrar este archivo de tu galería?'))return;await api('/api/library?id='+id,{method:'DELETE'});loadLib()}
+// ---------- Ajustes
+async function loadSet(){try{S=await api('/api/settings')}catch(e){}drawSet();engine()}
+function drawSet(){$('#sw').innerHTML=ACC.map((a,i)=>`<button class="${P.acc===i?'on':''}" style="background:linear-gradient(135deg,${a[1]},${a[2]})" onclick="setP('acc',${i})" aria-label="${a[0]}"></button>`).join('');
+ $('#s-par').innerHTML=chips('par',[[1,'1'],[2,'2'],[3,'3'],[4,'4']],S.parallel,'setPar');$('#s-dest').innerHTML=chips('dest',[['media','Galería y Música'],['downloads','Descargas']],S.dest,'setDest');
+ $('#d-kind').innerHTML=chips('dk',[['video','Video'],['audio','Audio']],P.kind,'setDk');$('#d-h').innerHTML=chips('dh',[['','Mejor'],['2160','4K'],['1080','1080p'],['720','720p'],['480','480p']],P.h,'setDh');
+ $('#d-ac').innerHTML=chips('dac',[['mp3','MP3'],['m4a','M4A'],['opus','OPUS'],['flac','FLAC'],['wav','WAV']],P.ac,'setDac');$('#d-abr').innerHTML=chips('dab',[['320','320'],['256','256'],['192','192'],['128','128']],P.abr,'setDab');
+ $('#d-tpl').innerHTML=chips('dt',[['title','Título'],['channel','Canal - Título'],['date','Fecha - Título']],P.tpl,'setDt');$('#d-langs').value=P.langs;
+ $('#s-rm').checked=!!P.rm;$('#s-vib').checked=!!P.vib;$('#s-wifi').checked=!!S.wifi;$('#s-anti').checked=!!S.anti;$('#s-au').checked=S.autoUpdate!==false}
+const setPar=v=>setS('parallel',+v),setDest=v=>setS('dest',v),setDk=v=>setP('kind',v),setDh=v=>setP('h',v),setDac=v=>setP('ac',v),setDab=v=>setP('abr',v),setDt=v=>setP('tpl',v);
+async function upd(){$('#vmsg').textContent='Actualizando…';try{await post('/api/update',{})}catch(e){}engine(true)}
+async function engine(w){try{const s=await api('/api/status'),e=$('#eng');
+ e.className='chip '+(s.error?'warn':s.ready&&!s.updating?'on':'');e.textContent=s.error?'Motor: error':s.updating?'Actualizando yt-dlp…':s.ready?'Motor listo · '+s.version:'Preparando motor…';
+ if($('#ver')){$('#ver').textContent='yt-dlp '+(s.version||'…');if(s.msg)$('#vmsg').textContent=s.msg}
+ if(!s.ready||s.updating||w)setTimeout(()=>engine(s.updating||!s.ready),1500)}catch(e){setTimeout(engine,2000)}}
+// ---------- inicio
+theme();drawDock();drawPre();engine();poll();
+(()=>{const q=new URLSearchParams(location.search),m=((q.get('u')||'')).match(/https?:\/\/\S+/);if(m){history.replaceState(null,'','/');$('#u').value=m[0];analyze()}})();
 </script></body></html>

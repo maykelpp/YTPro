@@ -2,7 +2,12 @@ package com.ytpro.local
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
@@ -14,10 +19,16 @@ import fi.iki.elonen.NanoHTTPD.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+
+class Entry(val id: String, val name: String, val uri: String, val kind: String, val size: Long, val mime: String, val date: Long) {
+    fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("kind", kind).put("size", size).put("date", date)
+}
 
 class Job(val id: String, val url: String, var title: String, val opts: JSONObject) {
     @Volatile var status = "queued"
@@ -26,34 +37,132 @@ class Job(val id: String, val url: String, var title: String, val opts: JSONObje
     @Volatile var speed = ""
     @Volatile var eta = ""
     @Volatile var error = ""
-    @Volatile var files: List<String> = emptyList()
+    @Volatile var files: List<Entry> = emptyList()
     @Volatile var cancel = false
     val created = System.currentTimeMillis()
 
     fun json(): JSONObject = JSONObject().put("id", id).put("url", url).put("title", title)
         .put("status", status).put("step", step).put("pct", pct).put("speed", speed).put("eta", eta)
-        .put("item", "").put("error", error).put("files", JSONArray(files)).put("created", created / 1000.0)
+        .put("error", error).put("files", JSONArray(files.map { it.json() })).put("opts", opts)
+        .put("created", created / 1000.0)
 }
 
-/** Servidor interno: misma API que ytdl_pro.py, pero ejecutando yt-dlp + FFmpeg empaquetados en la APK. */
+/** Servidor interno: yt-dlp + FFmpeg empaquetados en la APK, expuestos como API local para la interfaz. */
 object Backend {
     const val PORT = 8731
-    lateinit var dir: File
-    private lateinit var appCtx: Context
+    lateinit var appCtx: Context
+    private lateinit var prefs: SharedPreferences
+    private lateinit var tmpDir: File
     private var server: Srv? = null
+    @Volatile private var ready = false
+    @Volatile private var updating = false
+    @Volatile private var engineError = ""
+    @Volatile private var updateMsg = ""
+    @Volatile private var verCache = ""
     private val jobs = ConcurrentHashMap<String, Job>()
-    private val pool = Executors.newFixedThreadPool(2)
+    private val index = CopyOnWriteArrayList<Entry>()
+    private val pool = ThreadPoolExecutor(2, 4, 30, TimeUnit.SECONDS, LinkedBlockingQueue())
     private val CLIENTS: List<String?> = listOf(null, "android_vr", "tv", "web_safari", "mweb", "ios")
     private val AV = setOf("mp4", "mkv", "webm", "mp3", "m4a", "opus", "flac", "wav", "ogg", "aac")
 
+    // ------------------------------------------------------------ arranque (el servidor sube al instante; el motor, en segundo plano)
     @Synchronized
     fun start(ctx: Context) {
         if (server != null) return
         appCtx = ctx.applicationContext
-        dir = File(appCtx.getExternalFilesDir(null) ?: appCtx.filesDir, "YTPro").also { it.mkdirs() }
-        YoutubeDL.getInstance().init(appCtx)
-        FFmpeg.getInstance().init(appCtx)
+        prefs = appCtx.getSharedPreferences("ytpro", Context.MODE_PRIVATE)
+        tmpDir = File(appCtx.getExternalFilesDir(null) ?: appCtx.filesDir, "tmp").also { it.mkdirs() }
+        pool.corePoolSize = prefs.getInt("parallel", 2).coerceIn(1, 4)
+        loadIndex()
         server = Srv().also { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false) }
+        Thread { initEngine() }.start()
+    }
+
+    private fun initEngine() {
+        try {
+            YoutubeDL.getInstance().init(appCtx)
+            FFmpeg.getInstance().init(appCtx)
+            ready = true
+
+            // Actualiza desde NIGHTLY como máximo una vez al día.
+            // Si una actualización falla, permite reintentar después de 6 horas.
+            val now = System.currentTimeMillis()
+            val lastSuccess = prefs.getLong("lastUpdate", 0L)
+            val lastAttempt = prefs.getLong("lastUpdateAttempt", 0L)
+            val day = 86_400_000L
+            val retryDelay = 21_600_000L
+            if (prefs.getBoolean("autoUpdate", true) &&
+                now - lastSuccess >= day && now - lastAttempt >= retryDelay) {
+                runUpdate()
+            }
+        } catch (e: Throwable) {
+            engineError = e.toString().take(200)
+            android.util.Log.e("YTPro", "No se pudo iniciar yt-dlp/FFmpeg", e)
+        }
+    }
+
+    private fun awaitEngine() {
+        val t0 = System.currentTimeMillis()
+        while ((!ready || updating) && engineError.isEmpty() &&
+            System.currentTimeMillis() - t0 < 180_000L) Thread.sleep(200)
+        if (engineError.isNotEmpty()) throw Exception("Motor: $engineError")
+        if (!ready) throw Exception("El motor sigue iniciando, espera unos segundos")
+    }
+
+    private fun ytdlVersion(): String {
+        if (verCache.isNotEmpty()) return verCache
+        return try {
+            // API documentada por youtubedl-android: versionName(Context).
+            YoutubeDL.getInstance().versionName(appCtx).also { verCache = it }
+        } catch (e: Throwable) {
+            android.util.Log.w("YTPro", "No se pudo consultar la versión de yt-dlp", e)
+            "?"
+        }
+    }
+
+    /**
+     * Actualiza yt-dlp desde el canal NIGHTLY oficial de youtubedl-android.
+     * Solo guarda lastUpdate cuando el estado confirma DONE o ALREADY_UP_TO_DATE.
+     */
+    @Synchronized
+    private fun runUpdate() {
+        if (updating) return
+        updating = true
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong("lastUpdateAttempt", now).apply()
+        updateMsg = "Descargando actualización NIGHTLY de yt-dlp…"
+        try {
+            val status = YoutubeDL.getInstance().updateYoutubeDL(
+                appCtx,
+                YoutubeDL.UpdateChannel._NIGHTLY
+            )
+            when (status.toString().substringAfterLast('.').uppercase()) {
+                "DONE" -> {
+                    verCache = ""
+                    prefs.edit().putLong("lastUpdate", now).apply()
+                    updateMsg = "yt-dlp actualizado: ${ytdlVersion()}"
+                    android.util.Log.i("YTPro", updateMsg)
+                }
+                "ALREADY_UP_TO_DATE" -> {
+                    verCache = ""
+                    prefs.edit().putLong("lastUpdate", now).apply()
+                    updateMsg = "yt-dlp ya está actualizado: ${ytdlVersion()}"
+                    android.util.Log.i("YTPro", updateMsg)
+                }
+                else -> {
+                    updateMsg = "La actualización no se completó ($status). Se podrá reintentar en 6 horas."
+                    android.util.Log.w("YTPro", updateMsg)
+                }
+            }
+        } catch (e: Throwable) {
+            val cause = e.cause ?: e
+            updateMsg = "Falló la actualización: " +
+                (cause.message ?: cause.toString()).take(150) +
+                ". Se podrá reintentar en 6 horas."
+            android.util.Log.e("YTPro", updateMsg, cause)
+        } finally {
+            updating = false
+        }
     }
 
     private class Srv : NanoHTTPD("127.0.0.1", PORT) {
@@ -93,50 +202,26 @@ object Backend {
     private fun mimeOf(ext: String) = when (ext) {
         "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"
         "mp3" -> "audio/mpeg"; "m4a", "aac" -> "audio/mp4"; "opus", "ogg" -> "audio/ogg"
-        "flac" -> "audio/flac"; "wav" -> "audio/wav"; "jpg" -> "image/jpeg"; "srt" -> "application/x-subrip"
+        "flac" -> "audio/flac"; "wav" -> "audio/x-wav"; "jpg" -> "image/jpeg"; "srt" -> "application/x-subrip"
         else -> "application/octet-stream"
     }
 
-    private fun clients(url: String, full: Boolean): List<String?> =
-        if (!url.contains("youtu")) listOf(null) else if (full) CLIENTS else CLIENTS.take(4)
-
-    private fun platformOf(url: String): String {
-        val u = url.lowercase()
-        return when {
-            "tiktok.com" in u -> "TikTok"
-            "instagram.com" in u -> "Instagram"
-            "youtube.com" in u || "youtu.be" in u -> "YouTube"
-            "facebook.com" in u || "fb.watch" in u -> "Facebook"
-            "x.com" in u || "twitter.com" in u -> "X"
-            "reddit.com" in u || "redd.it" in u -> "Reddit"
-            else -> "sitio"
-        }
-    }
-
-    private fun explainExtractorError(url: String, raw: String): String {
-        val platform = platformOf(url)
-        val detail = raw.ifBlank { "Error desconocido del extractor" }
-        return when {
-            platform == "TikTok" &&
-                (detail.contains("impersonat", true) ||
-                 detail.contains("webpage video data", true) ||
-                 detail.contains("status code 0", true)) ->
-                "TikTok: el motor Android incluido no dispone de curl_cffi para la " +
-                "impersonacion TLS que este extractor necesita. No se corrige solo " +
-                "subiendo la version de la biblioteca. En modo 100% local esta URL " +
-                "puede no ser compatible. Detalle: $detail"
-            platform == "Instagram" ->
-                "Instagram: el contenido puede requerir inicio de sesion, ser privado " +
-                "o no estar disponible para el extractor local. Solo se admiten " +
-                "contenidos accesibles publicamente y permitidos. Detalle: $detail"
-            else -> "$platform: no se pudo extraer el contenido. Comprueba que el enlace " +
-                "sea publico, que tengas conexion y que el sitio siga siendo compatible. " +
-                "Detalle: $detail"
-        }.take(700)
+    private fun clients(url: String, full: Boolean): List<String?> {
+        if (!url.contains("youtu")) return listOf(null)
+        val base = if (full) CLIENTS else CLIENTS.take(4)
+        if (!prefs.contains("good")) return base
+        val g = prefs.getString("good", "").let { if (it.isNullOrEmpty()) null else it }
+        return listOf(g) + base.filter { it != g }
     }
 
     private fun playerClient(r: YoutubeDLRequest, cl: String?) {
         if (cl != null) r.addOption("--extractor-args", "youtube:player_client=$cl")
+    }
+
+    private fun onWifi(): Boolean {
+        val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
     // ------------------------------------------------------------ rutas
@@ -154,6 +239,14 @@ object Backend {
                 val html = appCtx.assets.open("index.html").use { String(it.readBytes(), Charsets.UTF_8) }
                 NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
             }
+            p == "/api/status" -> json(JSONObject().put("ready", ready).put("updating", updating)
+                .put("version", if (ready) ytdlVersion() else "").put("error", engineError).put("msg", updateMsg))
+            p == "/api/settings" && m == Method.GET -> json(settings())
+            p == "/api/settings" && m == Method.POST -> { applySettings(body()); json(settings()) }
+            p == "/api/update" && m == Method.POST -> {
+                if (!updating) Thread { try { awaitEngine(); runUpdate() } catch (_: Exception) {} }.start()
+                json(JSONObject().put("ok", true))
+            }
             p == "/api/search" -> json(search(q("q")))
             p == "/api/info" && m == Method.POST -> json(info(body().getString("url").trim()))
             p == "/api/download" && m == Method.POST -> download(body())
@@ -163,57 +256,132 @@ object Backend {
                 val j = jobs[id]
                 if (j != null && (j.status == "queued" || j.status == "running")) {
                     j.cancel = true
-                    YoutubeDL.getInstance().destroyProcessById(id)
+                    try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Throwable) {}
                     if (j.status == "queued") { j.status = "error"; j.step = "Cancelado"; j.error = "Cancelado" }
                 } else jobs.remove(id)
                 json(JSONObject().put("ok", true))
             }
             p == "/api/library" && m == Method.GET -> library()
             p == "/api/library" && m == Method.DELETE -> {
-                val f = File(dir, q("name")).canonicalFile
-                if (f.parentFile != dir.canonicalFile || !f.isFile) text(Response.Status.NOT_FOUND, "no") else {
-                    f.delete(); json(JSONObject().put("ok", true))
+                val e = entry(q("id"))
+                if (e == null) text(Response.Status.NOT_FOUND, "no") else {
+                    try { appCtx.contentResolver.delete(Uri.parse(e.uri), null, null) } catch (_: Exception) {}
+                    index.remove(e); saveIndex()
+                    json(JSONObject().put("ok", true))
                 }
             }
-            p.startsWith("/files/") -> serveFile(s, p.removePrefix("/files/"))
+            p.startsWith("/files/") -> serveEntry(s, p.removePrefix("/files/"))
             else -> text(Response.Status.NOT_FOUND, "no")
         }
     }
 
-    private fun library(): Response {
-        val exts = AV + setOf("jpg", "srt")
-        val fs = (dir.listFiles() ?: emptyArray()).filter { it.isFile && it.extension.lowercase() in exts }
-            .sortedByDescending { it.lastModified() }
-        return json(JSONArray(fs.map {
-            JSONObject().put("name", it.name).put("size", it.length()).put("kind", kindOf(it.extension.lowercase()))
-        }))
+    private fun settings() = JSONObject().put("parallel", prefs.getInt("parallel", 2)).put("anti", prefs.getBoolean("anti", false))
+        .put("dest", prefs.getString("dest", "media")).put("wifi", prefs.getBoolean("wifi", false))
+        .put("autoUpdate", prefs.getBoolean("autoUpdate", true))
+
+    private fun applySettings(b: JSONObject) {
+        val e = prefs.edit()
+        if (b.has("parallel")) { val n = b.optInt("parallel", 2).coerceIn(1, 4); e.putInt("parallel", n); pool.corePoolSize = n }
+        if (b.has("anti")) e.putBoolean("anti", b.optBoolean("anti"))
+        if (b.has("wifi")) e.putBoolean("wifi", b.optBoolean("wifi"))
+        if (b.has("autoUpdate")) e.putBoolean("autoUpdate", b.optBoolean("autoUpdate"))
+        if (b.has("dest") && b.optString("dest") in listOf("media", "downloads")) e.putString("dest", b.optString("dest"))
+        e.apply()
     }
 
-    private fun serveFile(s: IHTTPSession, name: String): Response {
-        val f = File(dir, name).canonicalFile
-        if (f.parentFile != dir.canonicalFile || !f.isFile) return text(Response.Status.NOT_FOUND, "no")
-        val len = f.length()
-        val mime = mimeOf(f.extension.lowercase())
+    // ------------------------------------------------------------ biblioteca (MediaStore: Galeria, Musica, Descargas)
+    fun entry(id: String): Entry? = index.firstOrNull { it.id == id }
+
+    private fun exists(uri: String): Boolean = try {
+        appCtx.contentResolver.openAssetFileDescriptor(Uri.parse(uri), "r")?.use { true } ?: false
+    } catch (e: Exception) { false }
+
+    private fun loadIndex() {
+        try {
+            val f = File(appCtx.filesDir, "index.json")
+            if (!f.exists()) return
+            val a = JSONArray(f.readText())
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                index.add(Entry(o.getString("id"), o.getString("name"), o.getString("uri"), o.getString("kind"),
+                    o.getLong("size"), o.getString("mime"), o.getLong("date")))
+            }
+        } catch (_: Exception) {}
+    }
+
+    @Synchronized
+    private fun saveIndex() {
+        val a = JSONArray()
+        index.forEach {
+            a.put(JSONObject().put("id", it.id).put("name", it.name).put("uri", it.uri).put("kind", it.kind)
+                .put("size", it.size).put("mime", it.mime).put("date", it.date))
+        }
+        File(appCtx.filesDir, "index.json").writeText(a.toString())
+    }
+
+    private fun library(): Response {
+        val gone = index.filter { !exists(it.uri) }
+        if (gone.isNotEmpty()) { index.removeAll(gone.toSet()); saveIndex() }
+        return json(JSONArray(index.sortedByDescending { it.date }.map { it.json() }))
+    }
+
+    /** Copia el archivo a la coleccion publica (Peliculas / Musica / Imagenes / Descargas) y borra la copia temporal. */
+    private fun saveToMedia(f: File): Entry? {
+        val ext = f.extension.lowercase()
+        val kind = kindOf(ext)
+        val mime = mimeOf(ext)
+        val downloads = prefs.getString("dest", "media") == "downloads"
+        val (collection, rel) = when {
+            downloads || kind == "text" -> MediaStore.Downloads.EXTERNAL_CONTENT_URI to (Environment.DIRECTORY_DOWNLOADS + "/YTPro")
+            kind == "video" -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to (Environment.DIRECTORY_MOVIES + "/YTPro")
+            kind == "audio" -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to (Environment.DIRECTORY_MUSIC + "/YTPro")
+            else -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to (Environment.DIRECTORY_PICTURES + "/YTPro")
+        }
+        val cr = appCtx.contentResolver
+        val v = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = cr.insert(collection, v) ?: return null
+        return try {
+            cr.openOutputStream(uri)!!.use { o -> f.inputStream().use { it.copyTo(o, 1 shl 16) } }
+            cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            val e = Entry(UUID.randomUUID().toString().replace("-", "").take(10), f.name, uri.toString(), kind, f.length(), mime, System.currentTimeMillis())
+            f.delete()
+            e
+        } catch (e: Exception) {
+            try { cr.delete(uri, null, null) } catch (_: Exception) {}
+            null
+        }
+    }
+
+    private fun serveEntry(s: IHTTPSession, id: String): Response {
+        val e = entry(id) ?: return text(Response.Status.NOT_FOUND, "no")
+        val pfd = appCtx.contentResolver.openFileDescriptor(Uri.parse(e.uri), "r") ?: return text(Response.Status.NOT_FOUND, "no")
+        val len = pfd.statSize
+        val ins = ParcelFileDescriptor.AutoCloseInputStream(pfd)
         val range = s.headers["range"]
         if (range != null && range.startsWith("bytes=")) {
             val parts = range.removePrefix("bytes=").split("-")
             val start = parts[0].toLongOrNull() ?: 0L
             val end = parts.getOrNull(1)?.toLongOrNull() ?: (len - 1)
-            if (start >= len) return text(Response.Status.RANGE_NOT_SATISFIABLE, "rango")
-            val fis = FileInputStream(f)
-            fis.skip(start)
-            val r = NanoHTTPD.newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, fis, end - start + 1)
+            if (start >= len) { ins.close(); return text(Response.Status.RANGE_NOT_SATISFIABLE, "rango") }
+            ins.skip(start)
+            val r = NanoHTTPD.newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, e.mime, ins, end - start + 1)
             r.addHeader("Content-Range", "bytes $start-$end/$len")
             r.addHeader("Accept-Ranges", "bytes")
             return r
         }
-        val r = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, mime, FileInputStream(f), len)
+        val r = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, e.mime, ins, len)
         r.addHeader("Accept-Ranges", "bytes")
         return r
     }
 
     // ------------------------------------------------------------ yt-dlp: busqueda e info
     private fun search(q: String): JSONArray {
+        awaitEngine()
         val r = YoutubeDLRequest("ytsearch10:$q")
         r.addOption("--flat-playlist"); r.addOption("--dump-single-json"); r.addOption("--skip-download")
         val e = JSONObject(YoutubeDL.getInstance().execute(r).out).optJSONArray("entries") ?: JSONArray()
@@ -231,12 +399,13 @@ object Backend {
     }
 
     private fun info(url: String): JSONObject {
+        awaitEngine()
         var err: Exception? = null
         for (cl in clients(url, false)) {
             try {
                 val r = YoutubeDLRequest(url)
                 playerClient(r, cl)
-                r.addOption("--no-playlist"); r.addOption("--skip-download"); r.addOption("--dump-single-json")
+                r.addOption("--no-playlist"); r.addOption("--skip-download"); r.addOption("--extractor-retries", "3"); r.addOption("--dump-single-json")
                 val j = JSONObject(YoutubeDL.getInstance().execute(r).out)
                 val hs = mutableSetOf<Int>()
                 val fm = j.optJSONArray("formats") ?: JSONArray()
@@ -259,21 +428,24 @@ object Backend {
                     .put("heights", JSONArray(hs.sortedDescending())).put("count", count)
             } catch (e: Exception) { err = e }
         }
-        val cause = err
-        throw Exception(explainExtractorError(url, cause?.message ?: "No se pudo analizar el link"), cause)
+        throw err ?: Exception("No se pudo analizar el link")
     }
 
     // ------------------------------------------------------------ descargas
     private fun download(b: JSONObject): Response {
         val url = b.optString("url").trim()
         if (!Regex("^https?://.*").matches(url)) return text(Response.Status.BAD_REQUEST, "Link no valido")
+        if (prefs.getBoolean("wifi", false) && !onWifi()) return text(Response.Status.CONFLICT, "Solo WiFi esta activado: conectate a una red WiFi o desactiva la opcion en Ajustes.")
         fun pick(v: String, ok: List<String>, def: String) = if (v in ok) v else def
+        val langs = b.optString("sublangs").trim().let { if (Regex("[A-Za-z,.*\\-]{1,30}").matches(it)) it else "es,en" }
         val o = JSONObject()
             .put("kind", pick(b.optString("kind"), listOf("video", "audio", "subs", "thumb"), "video"))
             .put("acodec", pick(b.optString("acodec"), listOf("mp3", "m4a", "opus", "flac", "wav"), "mp3"))
             .put("abr", pick(b.optString("abr"), listOf("320", "256", "192", "128"), "192"))
+            .put("container", pick(b.optString("container"), listOf("mp4", "mkv"), "mp4"))
+            .put("tpl", pick(b.optString("tpl"), listOf("title", "channel", "date"), "title"))
             .put("height", b.optString("height").toIntOrNull() ?: 0)
-            .put("h264", b.optBoolean("h264", true)).put("subs", b.optBoolean("subs", false))
+            .put("h264", b.optBoolean("h264", true)).put("subs", b.optBoolean("subs", false)).put("sublangs", langs)
             .put("meta", b.optBoolean("meta", true)).put("playlist", b.optBoolean("playlist", false))
             .put("t0", b.optString("t0").take(12)).put("t1", b.optString("t1").take(12))
             .put("sb", b.optBoolean("sb", false)).put("chapters", b.optBoolean("chapters", false))
@@ -291,10 +463,16 @@ object Backend {
         val kind = o.getString("kind")
         val codec = o.getString("acodec")
         val playlist = o.getBoolean("playlist")
+        val base = when (o.optString("tpl")) {
+            "channel" -> "%(channel).40s - %(title).90s"
+            "date" -> "%(upload_date)s - %(title).100s"
+            else -> "%(title).120s"
+        }
         r.addOption("-P", tmp.absolutePath)
-        r.addOption("-o", if (playlist) "%(playlist_index)02d - %(title).120s.%(ext)s" else "%(title).120s.%(ext)s")
-        r.addOption("--retries", "5"); r.addOption("--fragment-retries", "5")
-        r.addOption("--http-chunk-size", "10M"); r.addOption("--concurrent-fragments", "4"); r.addOption("-4")
+        r.addOption("-o", (if (playlist) "%(playlist_index)02d - " else "") + base + ".%(ext)s")
+        r.addOption("--retries", "5"); r.addOption("--fragment-retries", "5"); r.addOption("--extractor-retries", "3")
+        r.addOption("--concurrent-fragments", "8"); r.addOption("--throttled-rate", "100K"); r.addOption("-4")
+        if (prefs.getBoolean("anti", false)) r.addOption("--http-chunk-size", "10M")
         r.addOption("--newline")
         if (playlist) {
             r.addOption("--yes-playlist")
@@ -309,10 +487,10 @@ object Backend {
                 val height = o.optInt("height", 0)
                 val h = if (height > 0) "[height<=$height]" else ""
                 val sel = (if (o.optBoolean("h264", true)) "bv*$h[vcodec^=avc1]+ba[ext=m4a]/" else "") + "bv*$h+ba/b$h/b"
-                r.addOption("-f", sel); r.addOption("--merge-output-format", "mp4")
+                r.addOption("-f", sel); r.addOption("--merge-output-format", o.optString("container", "mp4"))
                 if (o.optBoolean("subs")) {
                     r.addOption("--write-subs"); r.addOption("--write-auto-subs")
-                    r.addOption("--sub-langs", "es,en"); r.addOption("--embed-subs")
+                    r.addOption("--sub-langs", o.optString("sublangs", "es,en")); r.addOption("--embed-subs")
                 }
             }
             "audio" -> {
@@ -322,7 +500,7 @@ object Backend {
             }
             "subs" -> {
                 r.addOption("--skip-download"); r.addOption("--write-subs"); r.addOption("--write-auto-subs")
-                r.addOption("--sub-langs", "es,en"); r.addOption("--convert-subs", "srt")
+                r.addOption("--sub-langs", o.optString("sublangs", "es,en")); r.addOption("--convert-subs", "srt")
             }
             else -> {
                 r.addOption("--skip-download"); r.addOption("--write-thumbnail"); r.addOption("--convert-thumbnails", "jpg")
@@ -331,7 +509,7 @@ object Backend {
         if (kind == "video" || kind == "audio") {
             if (o.optBoolean("meta", true)) {
                 r.addOption("--embed-metadata")
-                if (kind == "video" || codec == "mp3" || codec == "m4a") {
+                if ((kind == "video" && o.optString("container", "mp4") == "mp4") || codec == "mp3" || codec == "m4a") {
                     r.addOption("--embed-thumbnail"); r.addOption("--convert-thumbnails", "jpg")
                 }
             }
@@ -349,14 +527,27 @@ object Backend {
         }
     }
 
+    private fun hint(e: String?): String = when {
+        e == null -> ""
+        e.contains("TikTok", true) || e.contains("impersonat", true) ->
+            "  -> Esta compilacion Android no incluye curl_cffi/impersonation. Actualizar yt-dlp puede ayudar con cambios del extractor, pero no instala esa dependencia; TikTok puede seguir sin funcionar."
+        e.contains("Instagram", true) ->
+            "  -> Instagram puede exigir una sesion valida o limitar enlaces privados. Prueba un enlace publico al que tengas permiso de acceder; esta app no puede abrir contenido privado."
+        e.contains("403") || e.contains("Sign in", true) ->
+            "  -> El sitio esta rechazando la solicitud o requiere autenticacion. Actualiza yt-dlp y usa solo contenido al que tengas acceso autorizado."
+        else -> "  -> Comprueba que el enlace sea publico y vuelve a intentar. Tambien puedes actualizar yt-dlp desde Ajustes."
+    }
+
     private fun runJob(job: Job) {
         val o = job.opts
         val kind = o.getString("kind")
         val exts = when (kind) { "subs" -> setOf("srt"); "thumb" -> setOf("jpg"); else -> AV }
-        val tmp = File(dir, ".tmp_${job.id}")
+        val tmp = File(tmpDir, "job_${job.id}")
         job.status = "running"
+        job.step = "Preparando"
         var firstErr: String? = null
-        for (cl in clients(job.url, true)) {
+        try { awaitEngine() } catch (e: Exception) { firstErr = e.message }
+        if (firstErr == null) for (cl in clients(job.url, true)) {
             if (job.cancel) break
             tmp.deleteRecursively(); tmp.mkdirs()
             job.pct = 0.0
@@ -372,42 +563,24 @@ object Backend {
                 val files = (tmp.listFiles() ?: emptyArray()).filter { it.isFile && it.extension.lowercase() in exts }
                     .sortedBy { it.name }
                 if (files.isNotEmpty()) {
-                    val done = mutableListOf<String>()
-                    for (f in files) {
-                        var dest = File(dir, f.name)
-                        if (dest.exists()) dest = File(dir, "${f.nameWithoutExtension}_${job.id.take(4)}.${f.extension}")
-                        if (!f.renameTo(dest)) { f.copyTo(dest, true); f.delete() }
-                        done.add(dest.name)
-                    }
+                    job.step = "Guardando en tu galeria"; job.speed = ""; job.eta = ""
+                    val saved = files.mapNotNull { saveToMedia(it) }
                     tmp.deleteRecursively()
-                    job.files = done; job.pct = 100.0; job.speed = ""; job.eta = ""
-                    job.step = "Listo"; job.status = "done"
+                    if (saved.isEmpty()) { firstErr = "No se pudo guardar en la galeria/musica"; break }
+                    index.addAll(saved); saveIndex()
+                    prefs.edit().putString("good", cl ?: "").apply()
+                    job.files = saved; job.pct = 100.0; job.step = "Listo"; job.status = "done"
                     return
                 }
                 if (firstErr == null) firstErr = "No se genero ningun archivo"
             } catch (e: Exception) {
                 if (job.cancel) break
-                if (firstErr == null) firstErr = explainExtractorError(job.url, e.message ?: e.toString())
+                if (firstErr == null) firstErr = (e.message ?: e.toString()).take(220)
             }
         }
         tmp.deleteRecursively()
         job.step = if (job.cancel) "Cancelado" else "Error"
-        job.error = if (job.cancel) "Cancelado" else (firstErr ?: explainExtractorError(job.url, "No se genero ningun archivo"))
+        job.error = if (job.cancel) "Cancelado" else (firstErr ?: "Error") + hint(firstErr)
         job.status = "error"
-    }
-
-    // ------------------------------------------------------------ guardar en Descargas
-    fun saveToDownloads(f: File): Boolean {
-        if (!f.isFile) return false
-        return try {
-            val v = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, f.name)
-                put(MediaStore.Downloads.MIME_TYPE, mimeOf(f.extension.lowercase()))
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/YTPro")
-            }
-            val uri = appCtx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: return false
-            appCtx.contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
-            true
-        } catch (e: Exception) { false }
     }
 }

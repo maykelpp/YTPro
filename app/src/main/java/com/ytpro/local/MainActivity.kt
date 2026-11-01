@@ -5,43 +5,61 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import java.io.File
 import java.net.URLEncoder
 
-/** Ventana (WebView) a la web que sirve el servidor interno (Backend.kt). */
+/** Ventana (WebView) a la interfaz que sirve el servidor interno (Backend.kt). */
 class MainActivity : Activity() {
     private lateinit var wv: WebView
-    private var ready = false
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun open(id: String) {
+            val e = Backend.entry(id) ?: return
+            runOnUiThread {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(e.uri), e.mime)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                } catch (x: Exception) { Toast.makeText(this@MainActivity, "No hay app para abrirlo", Toast.LENGTH_SHORT).show() }
+            }
+        }
+
+        @JavascriptInterface
+        fun share(id: String) {
+            val e = Backend.entry(id) ?: return
+            runOnUiThread {
+                val i = Intent(Intent.ACTION_SEND).setType(e.mime).putExtra(Intent.EXTRA_STREAM, Uri.parse(e.uri))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                startActivity(Intent.createChooser(i, "Compartir"))
+            }
+        }
+    }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         wv = WebView(this)
         setContentView(wv)
+        wv.setBackgroundColor(0xFF05060F.toInt())
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
         wv.settings.mediaPlaybackRequiresUserGesture = false
         wv.webChromeClient = WebChromeClient()
         wv.webViewClient = WebViewClient()
-        wv.setDownloadListener { url, _, _, _, _ -> save(url) }
-        msg("Preparando el motor…", "La primera vez tarda un poco: descomprime yt-dlp y FFmpeg.")
+        wv.addJavascriptInterface(Bridge(), "Android")
+        // El servidor sube al instante; el motor (yt-dlp/FFmpeg) se prepara en segundo plano mientras ya ves la interfaz.
         Thread {
             try {
                 Backend.start(applicationContext)
-                runOnUiThread { ready = true; openApp(intent) }
+                runOnUiThread { openApp(intent) }
             } catch (e: Throwable) {
-                runOnUiThread { msg("No se pudo iniciar", e.toString()) }
+                runOnUiThread { Toast.makeText(this, "No se pudo iniciar: $e", Toast.LENGTH_LONG).show() }
             }
         }.start()
-    }
-
-    private fun msg(t: String, d: String) {
-        val html = "<body style='background:#101216;color:#eee;font-family:sans-serif;padding:24px'><h3>$t</h3><p>$d</p>"
-        wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
     }
 
     private fun openApp(i: Intent?) {
@@ -56,21 +74,13 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (ready) openApp(intent)
-    }
-
-    private fun save(url: String) {
-        val name = Uri.parse(url).lastPathSegment ?: return
-        Thread {
-            val ok = Backend.saveToDownloads(File(Backend.dir, name))
-            runOnUiThread {
-                Toast.makeText(this, if (ok) "Guardado en Descargas/YTPro" else "No se pudo guardar", Toast.LENGTH_LONG).show()
-            }
-        }.start()
+        openApp(intent)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (wv.canGoBack()) wv.goBack() else super.onBackPressed()
+        wv.evaluateJavascript("(window.goBack&&window.goBack())?'1':'0'") { r ->
+            if (r != "\"1\"" && r != "1") super.onBackPressed()
+        }
     }
 }

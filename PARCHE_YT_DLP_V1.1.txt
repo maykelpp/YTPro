@@ -1,0 +1,20 @@
+YTPro v1.1 — parche sobre el proyecto original ytpro_apkv1.zip (Claude)
+
+Se conservaron los archivos y funciones del proyecto original. Cambios puntuales:
+- Actualizador usa la API oficial YoutubeDL.UpdateChannel._NIGHTLY.
+- Usa versionName(Context), API documentada por youtubedl-android.
+- Guarda la fecha de actualización solo si el estado es DONE o ALREADY_UP_TO_DATE.
+- Si falla, conserva el error y permite reintentar después de 6 horas.
+- Añade 3 reintentos de extractor a análisis y descargas.
+- Mejora mensajes de error para TikTok e Instagram sin ocultar la limitación real.
+- VersionCode 2 / versionName 1.1.
+
+LIMITACIÓN TIKTOK:
+La biblioteca youtubedl-android 0.18.1 incluye yt-dlp y Python para Android, pero no
+incluye curl_cffi. El error "no impersonate target is available" está reportado
+específicamente en Android por la ausencia de esa dependencia. El actualizador NIGHTLY
+no puede instalar por sí solo curl_cffi; por tanto no se promete que TikTok funcione.
+Instagram también puede exigir autenticación y no se garantiza para enlaces privados.
+
+No se cambió la interfaz, el servidor local, las rutas de API, MediaStore ni las
+funciones de descarga del proyecto original. No se compiló ni probó esta APK aquí.
