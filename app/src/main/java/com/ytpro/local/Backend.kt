@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
+import com.yausername.aria2c.Aria2c
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -59,6 +60,7 @@ object Backend {
     @Volatile private var engineError = ""
     @Volatile private var updateMsg = ""
     @Volatile private var verCache = ""
+    @Volatile private var ariaOk = false
     private val jobs = ConcurrentHashMap<String, Job>()
     private val index = CopyOnWriteArrayList<Entry>()
     private val pool = ThreadPoolExecutor(2, 4, 30, TimeUnit.SECONDS, LinkedBlockingQueue())
@@ -66,6 +68,8 @@ object Backend {
     private val AV = setOf("mp4", "mkv", "webm", "mp3", "m4a", "opus", "flac", "wav", "ogg", "aac")
 
     // ------------------------------------------------------------ arranque (el servidor sube al instante; el motor, en segundo plano)
+    fun pref(): SharedPreferences = prefs
+
     @Synchronized
     fun start(ctx: Context) {
         if (server != null) return
@@ -82,29 +86,18 @@ object Backend {
         try {
             YoutubeDL.getInstance().init(appCtx)
             FFmpeg.getInstance().init(appCtx)
+            try { Aria2c.getInstance().init(appCtx); ariaOk = true } catch (_: Throwable) {}
             ready = true
-
-            // Actualiza desde NIGHTLY como máximo una vez al día.
-            // Si una actualización falla, permite reintentar después de 6 horas.
-            val now = System.currentTimeMillis()
-            val lastSuccess = prefs.getLong("lastUpdate", 0L)
-            val lastAttempt = prefs.getLong("lastUpdateAttempt", 0L)
-            val day = 86_400_000L
-            val retryDelay = 21_600_000L
             if (prefs.getBoolean("autoUpdate", true) &&
-                now - lastSuccess >= day && now - lastAttempt >= retryDelay) {
-                runUpdate()
-            }
+                System.currentTimeMillis() - prefs.getLong("lastUpdate", 0L) > 86_400_000L) runUpdate()
         } catch (e: Throwable) {
             engineError = e.toString().take(200)
-            android.util.Log.e("YTPro", "No se pudo iniciar yt-dlp/FFmpeg", e)
         }
     }
 
     private fun awaitEngine() {
         val t0 = System.currentTimeMillis()
-        while ((!ready || updating) && engineError.isEmpty() &&
-            System.currentTimeMillis() - t0 < 180_000L) Thread.sleep(200)
+        while ((!ready || updating) && engineError.isEmpty() && System.currentTimeMillis() - t0 < 180_000L) Thread.sleep(200)
         if (engineError.isNotEmpty()) throw Exception("Motor: $engineError")
         if (!ready) throw Exception("El motor sigue iniciando, espera unos segundos")
     }
@@ -112,57 +105,30 @@ object Backend {
     private fun ytdlVersion(): String {
         if (verCache.isNotEmpty()) return verCache
         return try {
-            // API documentada por youtubedl-android: versionName(Context).
-            (YoutubeDL.getInstance().versionName(appCtx) ?: "?").also { verCache = it }
-        } catch (e: Throwable) {
-            android.util.Log.w("YTPro", "No se pudo consultar la versión de yt-dlp", e)
-            "?"
-        }
+            val y = YoutubeDL.getInstance()
+            val m = y.javaClass.methods.firstOrNull { it.name == "version" }
+            val v = if (m == null) null else m.invoke(y, *(if (m.parameterCount == 1) arrayOf<Any?>(appCtx) else arrayOf<Any?>()))
+            (v as? String ?: "?").also { verCache = it }
+        } catch (e: Throwable) { "?" }
     }
 
-    /**
-     * Actualiza yt-dlp desde el canal NIGHTLY oficial de youtubedl-android.
-     * Solo guarda lastUpdate cuando el estado confirma DONE o ALREADY_UP_TO_DATE.
-     */
-    @Synchronized
+    /** Actualiza yt-dlp (canal nightly) por reflexion, para no depender del nombre exacto de la API. */
     private fun runUpdate() {
-        if (updating) return
         updating = true
-        val now = System.currentTimeMillis()
-        prefs.edit().putLong("lastUpdateAttempt", now).apply()
-        updateMsg = "Descargando actualización NIGHTLY de yt-dlp…"
         try {
-            val status = YoutubeDL.getInstance().updateYoutubeDL(
-                appCtx,
-                YoutubeDL.UpdateChannel._NIGHTLY
-            )
-            when (status.toString().substringAfterLast('.').uppercase()) {
-                "DONE" -> {
-                    verCache = ""
-                    prefs.edit().putLong("lastUpdate", now).apply()
-                    updateMsg = "yt-dlp actualizado: ${ytdlVersion()}"
-                    android.util.Log.i("YTPro", updateMsg)
-                }
-                "ALREADY_UP_TO_DATE" -> {
-                    verCache = ""
-                    prefs.edit().putLong("lastUpdate", now).apply()
-                    updateMsg = "yt-dlp ya está actualizado: ${ytdlVersion()}"
-                    android.util.Log.i("YTPro", updateMsg)
-                }
-                else -> {
-                    updateMsg = "La actualización no se completó ($status). Se podrá reintentar en 6 horas."
-                    android.util.Log.w("YTPro", updateMsg)
-                }
-            }
+            val y = YoutubeDL.getInstance()
+            val chanCls = Class.forName("com.yausername.youtubedl_android.YoutubeDL\$UpdateChannel")
+            val chan: Any? = listOf("_NIGHTLY", "NIGHTLY").firstNotNullOfOrNull { n ->
+                try { chanCls.getField(n).get(null) } catch (e: Throwable) { null }
+            } ?: Class.forName("com.yausername.youtubedl_android.YoutubeDL\$UpdateChannel\$NIGHTLY").getField("INSTANCE").get(null)
+            val m = y.javaClass.methods.first { it.name == "updateYoutubeDL" }
+            val r = m.invoke(y, appCtx, chan)
+            prefs.edit().putLong("lastUpdate", System.currentTimeMillis()).apply()
+            verCache = ""
+            updateMsg = "yt-dlp actualizado ($r)"
         } catch (e: Throwable) {
-            val cause = e.cause ?: e
-            updateMsg = "Falló la actualización: " +
-                (cause.message ?: cause.toString()).take(150) +
-                ". Se podrá reintentar en 6 horas."
-            android.util.Log.e("YTPro", updateMsg, cause)
-        } finally {
-            updating = false
-        }
+            updateMsg = "No se pudo actualizar: " + (e.cause?.message ?: e.message ?: e.toString()).take(120)
+        } finally { updating = false }
     }
 
     private class Srv : NanoHTTPD("127.0.0.1", PORT) {
@@ -247,6 +213,9 @@ object Backend {
                 if (!updating) Thread { try { awaitEngine(); runUpdate() } catch (_: Exception) {} }.start()
                 json(JSONObject().put("ok", true))
             }
+            p == "/api/app/check" -> json(Updater.check(q("force") == "1"))
+            p == "/api/app/update" && m == Method.POST -> json(Updater.start())
+            p == "/api/app/update/status" -> json(Updater.status())
             p == "/api/search" -> json(search(q("q")))
             p == "/api/info" && m == Method.POST -> json(info(body().getString("url").trim()))
             p == "/api/download" && m == Method.POST -> download(body())
@@ -277,7 +246,8 @@ object Backend {
 
     private fun settings() = JSONObject().put("parallel", prefs.getInt("parallel", 2)).put("anti", prefs.getBoolean("anti", false))
         .put("dest", prefs.getString("dest", "media")).put("wifi", prefs.getBoolean("wifi", false))
-        .put("autoUpdate", prefs.getBoolean("autoUpdate", true))
+        .put("autoUpdate", prefs.getBoolean("autoUpdate", true)).put("aria", prefs.getBoolean("aria", true))
+        .put("ariaOk", ariaOk).put("updUrl", prefs.getString("updUrl", "http://127.0.0.1:5001"))
 
     private fun applySettings(b: JSONObject) {
         val e = prefs.edit()
@@ -285,6 +255,11 @@ object Backend {
         if (b.has("anti")) e.putBoolean("anti", b.optBoolean("anti"))
         if (b.has("wifi")) e.putBoolean("wifi", b.optBoolean("wifi"))
         if (b.has("autoUpdate")) e.putBoolean("autoUpdate", b.optBoolean("autoUpdate"))
+        if (b.has("aria")) e.putBoolean("aria", b.optBoolean("aria"))
+        if (b.has("updUrl")) {
+            val u = b.optString("updUrl").trim().trimEnd('/')
+            if (Regex("https?://[A-Za-z0-9.\\-]+(:\\d+)?").matches(u)) { e.putString("updUrl", u); Updater.reset() }
+        }
         if (b.has("dest") && b.optString("dest") in listOf("media", "downloads")) e.putString("dest", b.optString("dest"))
         e.apply()
     }
@@ -405,7 +380,7 @@ object Backend {
             try {
                 val r = YoutubeDLRequest(url)
                 playerClient(r, cl)
-                r.addOption("--no-playlist"); r.addOption("--skip-download"); r.addOption("--extractor-retries", "3"); r.addOption("--dump-single-json")
+                r.addOption("--no-playlist"); r.addOption("--skip-download"); r.addOption("--dump-single-json")
                 val j = JSONObject(YoutubeDL.getInstance().execute(r).out)
                 val hs = mutableSetOf<Int>()
                 val fm = j.optJSONArray("formats") ?: JSONArray()
@@ -459,7 +434,7 @@ object Backend {
         return json(JSONObject().put("id", job.id))
     }
 
-    private fun args(r: YoutubeDLRequest, o: JSONObject, tmp: File, cl: String?) {
+    private fun args(r: YoutubeDLRequest, o: JSONObject, tmp: File, cl: String?, fast: Boolean) {
         val kind = o.getString("kind")
         val codec = o.getString("acodec")
         val playlist = o.getBoolean("playlist")
@@ -470,10 +445,15 @@ object Backend {
         }
         r.addOption("-P", tmp.absolutePath)
         r.addOption("-o", (if (playlist) "%(playlist_index)02d - " else "") + base + ".%(ext)s")
-        r.addOption("--retries", "5"); r.addOption("--fragment-retries", "5"); r.addOption("--extractor-retries", "3")
+        r.addOption("--retries", "5"); r.addOption("--fragment-retries", "5")
         r.addOption("--concurrent-fragments", "8"); r.addOption("--throttled-rate", "100K"); r.addOption("-4")
         if (prefs.getBoolean("anti", false)) r.addOption("--http-chunk-size", "10M")
         r.addOption("--newline")
+        if (fast) {
+            // aria2c: varias conexiones a la vez por archivo (mucho mas rapido). Si falla, se reintenta sin el.
+            r.addOption("--downloader", "libaria2c.so")
+            r.addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M --summary-interval=1")
+        }
         if (playlist) {
             r.addOption("--yes-playlist")
             val items = o.optString("items")
@@ -530,12 +510,9 @@ object Backend {
     private fun hint(e: String?): String = when {
         e == null -> ""
         e.contains("TikTok", true) || e.contains("impersonat", true) ->
-            "  -> Esta compilacion Android no incluye curl_cffi/impersonation. Actualizar yt-dlp puede ayudar con cambios del extractor, pero no instala esa dependencia; TikTok puede seguir sin funcionar."
-        e.contains("Instagram", true) ->
-            "  -> Instagram puede exigir una sesion valida o limitar enlaces privados. Prueba un enlace publico al que tengas permiso de acceder; esta app no puede abrir contenido privado."
-        e.contains("403") || e.contains("Sign in", true) ->
-            "  -> El sitio esta rechazando la solicitud o requiere autenticacion. Actualiza yt-dlp y usa solo contenido al que tengas acceso autorizado."
-        else -> "  -> Comprueba que el enlace sea publico y vuelve a intentar. Tambien puedes actualizar yt-dlp desde Ajustes."
+            "  -> TikTok cambio su web: ve a Ajustes > Actualizar yt-dlp y reintenta. Si sigue igual, ese sitio aun no funciona sin impersonacion."
+        e.contains("403") || e.contains("Sign in", true) -> "  -> Prueba Ajustes > Actualizar yt-dlp, o activa el modo anti-bloqueo."
+        else -> "  -> Ajustes > Actualizar yt-dlp puede arreglarlo."
     }
 
     private fun runJob(job: Job) {
@@ -546,6 +523,7 @@ object Backend {
         job.status = "running"
         job.step = "Preparando"
         var firstErr: String? = null
+        var fast = prefs.getBoolean("aria", true) && ariaOk
         try { awaitEngine() } catch (e: Exception) { firstErr = e.message }
         if (firstErr == null) for (cl in clients(job.url, true)) {
             if (job.cancel) break
@@ -553,12 +531,20 @@ object Backend {
             job.pct = 0.0
             try {
                 val r = YoutubeDLRequest(job.url)
-                args(r, o, tmp, cl)
+                args(r, o, tmp, cl, fast)
                 YoutubeDL.getInstance().execute(r, job.id) { p, eta, line ->
-                    job.pct = p.toDouble().coerceIn(0.0, 100.0)
-                    job.eta = if (eta >= 0) "%02d:%02d".format(eta / 60, eta % 60) else ""
-                    job.step = "Descargando"
-                    Regex("at\\s+(\\S+/s)").find(line)?.let { job.speed = it.groupValues[1] }
+                    val ar = Regex("\\((\\d{1,3})%\\).*?DL:(\\S+)(?:.*?ETA:(\\S+))?").find(line)
+                    if (ar != null) {
+                        job.pct = ar.groupValues[1].toDouble().coerceIn(0.0, 100.0)
+                        job.speed = ar.groupValues[2] + "/s"
+                        job.eta = ar.groupValues[3]
+                        job.step = "Descargando (acelerado)"
+                    } else if (p > 0f) {
+                        job.pct = p.toDouble().coerceIn(0.0, 100.0)
+                        job.eta = if (eta >= 0) "%02d:%02d".format(eta / 60, eta % 60) else ""
+                        job.step = "Descargando"
+                        Regex("at\\s+(\\S+/s)").find(line)?.let { job.speed = it.groupValues[1] }
+                    }
                 }
                 val files = (tmp.listFiles() ?: emptyArray()).filter { it.isFile && it.extension.lowercase() in exts }
                     .sortedBy { it.name }
@@ -573,9 +559,11 @@ object Backend {
                     return
                 }
                 if (firstErr == null) firstErr = "No se genero ningun archivo"
+                fast = false
             } catch (e: Exception) {
                 if (job.cancel) break
                 if (firstErr == null) firstErr = (e.message ?: e.toString()).take(220)
+                fast = false
             }
         }
         tmp.deleteRecursively()

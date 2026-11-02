@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -25,6 +26,13 @@ class MainActivity : Activity() {
                     startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(e.uri), e.mime)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
                 } catch (x: Exception) { Toast.makeText(this@MainActivity, "No hay app para abrirlo", Toast.LENGTH_SHORT).show() }
+            }
+        }
+
+        @JavascriptInterface
+        fun allowInstall() {
+            runOnUiThread {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
             }
         }
 
