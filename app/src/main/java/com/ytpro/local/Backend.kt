@@ -31,7 +31,14 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-class Entry(val id: String, val name: String, val uri: String, val kind: String, val size: Long, val mime: String, val date: Long, @Volatile var lyrics: String = "") {
+class Entry(
+    val id: String, val name: String, val uri: String, val kind: String,
+    val size: Long, val mime: String, val date: Long,
+    @Volatile var lyrics: String = "",
+    @Volatile var artist: String = "",
+    @Volatile var track: String = "",
+    @Volatile var duration: Double = 0.0
+) {
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("kind", kind).put("size", size).put("date", date)
         .put("hasLyrics", lyrics.isNotEmpty())
 }
@@ -189,6 +196,16 @@ object Backend {
         if (cl != null) r.addOption("--extractor-args", "youtube:player_client=$cl")
     }
 
+    private fun isRateLimited(e: Throwable?): Boolean {
+        var cur = e
+        while (cur != null) {
+            val msg = cur.message.orEmpty()
+            if (msg.contains("429") || msg.contains("Too Many Requests", true)) return true
+            cur = cur.cause
+        }
+        return false
+    }
+
     private fun onWifi(): Boolean {
         val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
@@ -226,9 +243,11 @@ object Backend {
                 val b = body()
                 val e = entry(b.optString("id"))
                 if (e == null) text(Response.Status.NOT_FOUND, "no") else {
-                    val qn = b.optString("q").ifEmpty { e.name.substringBeforeLast('.') }
-                    val (a, t) = splitArtist("", qn)
-                    val r = fetchLyrics(a, t, 0.0)
+                    val qn = b.optString("q").trim()
+                    val (qa, qt) = if (qn.isNotEmpty()) splitArtist(e.artist, qn) else (e.artist to e.track.ifEmpty { e.name.substringBeforeLast('.') })
+                    val a = qa.ifEmpty { e.artist }
+                    val t = qt.ifEmpty { e.track.ifEmpty { e.name.substringBeforeLast('.') } }
+                    val r = fetchLyrics(a, t, e.duration)
                     if (r != null) { e.lyrics = r; saveIndex() }
                     json(JSONObject().put("ok", r != null))
                 }
@@ -297,7 +316,8 @@ object Backend {
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
                 index.add(Entry(o.getString("id"), o.getString("name"), o.getString("uri"), o.getString("kind"),
-                    o.getLong("size"), o.getString("mime"), o.getLong("date"), o.optString("lyrics", "")))
+                    o.getLong("size"), o.getString("mime"), o.getLong("date"), o.optString("lyrics", ""),
+                    o.optString("artist", ""), o.optString("track", ""), o.optDouble("duration", 0.0)))
             }
         } catch (_: Exception) {}
     }
@@ -307,7 +327,8 @@ object Backend {
         val a = JSONArray()
         index.forEach {
             a.put(JSONObject().put("id", it.id).put("name", it.name).put("uri", it.uri).put("kind", it.kind)
-                .put("size", it.size).put("mime", it.mime).put("date", it.date).put("lyrics", it.lyrics))
+                 .put("size", it.size).put("mime", it.mime).put("date", it.date).put("lyrics", it.lyrics)
+                .put("artist", it.artist).put("track", it.track).put("duration", it.duration))
         }
         File(appCtx.filesDir, "index.json").writeText(a.toString())
     }
@@ -421,8 +442,13 @@ object Backend {
                     .put("heights", JSONArray(hs.sortedDescending())).put("count", count)
                     .put("artist", j.str("artist").ifEmpty { j.str("creator") }).put("track", j.str("track").ifEmpty { j.str("title") })
                     .put("durSec", j.optDouble("duration", 0.0))
-            } catch (e: Exception) { err = e }
+            } catch (e: Exception) {
+                err = e
+                // Un 429 es un límite temporal: no bombardear YouTube probando más clientes.
+                if (isRateLimited(e)) break
+            }
         }
+        if (isRateLimited(err)) throw Exception("YouTube está limitando las solicitudes (HTTP 429). Espera un rato antes de volver a analizar este video.")
         throw err ?: Exception("No se pudo analizar el link")
     }
 
@@ -489,8 +515,16 @@ object Backend {
             "video" -> {
                 val height = o.optInt("height", 0)
                 val h = if (height > 0) "[height<=$height]" else ""
-                val sel = (if (o.optBoolean("h264", true)) "bv*$h[vcodec^=avc1]+ba[ext=m4a]/" else "") + "bv*$h+ba/b$h/b"
-                r.addOption("-f", sel); r.addOption("--merge-output-format", o.optString("container", "mp4"))
+                val sel = if (o.optBoolean("h264", true)) {
+                    // Prioriza H.264 + AAC, pero permite otros códecs y formatos progresivos como respaldo.
+                    "bestvideo*$h[vcodec^=avc1]+bestaudio[ext=m4a]/" +
+                    "bestvideo*$h+bestaudio/" +
+                    "best$h/best"
+                } else {
+                    "bestvideo*$h+bestaudio/best$h/best"
+                }
+                r.addOption("-f", sel)
+                r.addOption("--merge-output-format", o.optString("container", "mp4"))
                 if (o.optBoolean("subs")) {
                     r.addOption("--write-subs"); r.addOption("--write-auto-subs")
                     r.addOption("--sub-langs", o.optString("sublangs", "es,en")); r.addOption("--embed-subs")
@@ -554,27 +588,71 @@ object Backend {
         return artist to track
     }
 
-    /** Devuelve el texto de la letra (sincronizada si existe) o null. */
+    private fun matchText(s: String): String = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "")
+        .replace(Regex("[^a-z0-9]+"), " ").trim()
+
+    private fun similarity(a: String, b: String): Double {
+        val aa = matchText(a).split(Regex("\\s+")).filter { it.length > 1 }.toSet()
+        val bb = matchText(b).split(Regex("\\s+")).filter { it.length > 1 }.toSet()
+        if (aa.isEmpty() || bb.isEmpty()) return 0.0
+        return aa.intersect(bb).size.toDouble() / aa.union(bb).size.toDouble()
+    }
+
+    /** Busca letras y descarta versiones con título/duración claramente diferentes. */
     private fun fetchLyrics(artist: String, rawTitle: String, dur: Double): String? {
         val title = cleanTitle(rawTitle)
+        if (title.isEmpty()) return null
         fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
-        if (artist.isNotEmpty() && title.isNotEmpty() && dur > 0) {
+
+        if (artist.isNotEmpty() && dur > 0) {
             val j = lrcJson("get?artist_name=${enc(artist)}&track_name=${enc(title)}&duration=${dur.toInt()}") as? JSONObject
-            val t = if (j == null) null else j.str("syncedLyrics").ifEmpty { j.str("plainLyrics") }
-            if (!t.isNullOrEmpty()) return t
+            if (j != null) {
+                val foundDur = j.optDouble("duration", 0.0)
+                val tolerance = maxOf(10.0, dur * 0.08)
+                val durationMatches = foundDur <= 0.0 || kotlin.math.abs(foundDur - dur) <= tolerance
+                val titleMatches = similarity(title, j.str("trackName")) >= 0.45
+                val artistMatches = artist.isEmpty() || similarity(artist, j.str("artistName")) >= 0.25
+                if (durationMatches && titleMatches && artistMatches) {
+                    val synced = j.str("syncedLyrics")
+                    if (synced.isNotEmpty()) return synced
+                    val plain = j.str("plainLyrics")
+                    if (plain.isNotEmpty()) return plain
+                }
+            }
         }
+
         val items = mutableListOf<JSONObject>()
-        for (q in listOf("$artist $title".trim(), title).distinct()) {
+        val queries = listOf("$artist $title".trim(), title).distinct().filter { it.isNotEmpty() }
+        for (q in queries) {
             val a = lrcJson("search?q=${enc(q)}") as? JSONArray ?: continue
             for (i in 0 until a.length()) items.add(a.getJSONObject(i))
             if (items.any { it.str("syncedLyrics").isNotEmpty() }) break
         }
-        val synced = items.filter { it.str("syncedLyrics").isNotEmpty() }
-        if (synced.isNotEmpty()) {
-            val best = synced.minByOrNull { Math.abs(it.optDouble("duration", dur) - dur) }!!
-            return best.str("syncedLyrics")
+
+        fun score(item: JSONObject): Double {
+            val ts = similarity(title, item.str("trackName"))
+            val ascore = if (artist.isNotEmpty()) similarity(artist, item.str("artistName")) else 0.5
+            val foundDur = item.optDouble("duration", 0.0)
+            val dscore = if (dur > 0 && foundDur > 0) {
+                val delta = kotlin.math.abs(foundDur - dur)
+                if (delta <= maxOf(10.0, dur * 0.08)) 1.0 else (1.0 - delta / maxOf(dur, foundDur)).coerceAtLeast(0.0)
+            } else 0.5
+            return ts * 0.70 + ascore * 0.15 + dscore * 0.15
         }
-        return items.firstOrNull { it.str("plainLyrics").isNotEmpty() }?.str("plainLyrics")
+
+        val synced = items.filter { it.str("syncedLyrics").isNotEmpty() }
+        val bestSynced = synced.maxByOrNull { score(it) }
+        if (bestSynced != null && similarity(title, bestSynced.str("trackName")) >= 0.45) {
+            val foundDur = bestSynced.optDouble("duration", 0.0)
+            if (dur <= 0 || foundDur <= 0 || kotlin.math.abs(foundDur - dur) <= maxOf(15.0, dur * 0.12)) {
+                return bestSynced.str("syncedLyrics")
+            }
+        }
+
+        val plain = items.filter { it.str("plainLyrics").isNotEmpty() }
+            .maxByOrNull { score(it) }
+        return if (plain != null && similarity(title, plain.str("trackName")) >= 0.45) plain.str("plainLyrics") else null
     }
 
     private fun lyricsFor(job: Job): String? {
@@ -597,10 +675,14 @@ object Backend {
 
     private fun hint(e: String?): String = when {
         e == null -> ""
+        e.contains("429") || e.contains("Too Many Requests", true) ->
+            " No sigas reintentando ahora: espera unos minutos, evita iniciar varias descargas y vuelve a probar."
+        e.contains("Requested format is not available", true) || e.contains("Only images are available", true) ->
+            " YouTube no entregó una pista de video para este cliente. Prueba más tarde; si otros videos funcionan, el problema puede ser específico de ese video o de la respuesta de YouTube."
         e.contains("TikTok", true) || e.contains("impersonat", true) ->
-            "  -> TikTok cambio su web: ve a Ajustes > Actualizar yt-dlp y reintenta. Si sigue igual, ese sitio aun no funciona sin impersonacion."
-        e.contains("403") || e.contains("Sign in", true) -> "  -> Prueba Ajustes > Actualizar yt-dlp, o activa el modo anti-bloqueo."
-        else -> "  -> Ajustes > Actualizar yt-dlp puede arreglarlo."
+            " TikTok cambió su web: actualiza yt-dlp. Algunos enlaces pueden seguir sin funcionar por falta de impersonación."
+        e.contains("403") || e.contains("Sign in", true) -> " Prueba actualizar yt-dlp y vuelve a intentarlo más tarde."
+        else -> " Comprueba el enlace y prueba actualizar yt-dlp."
     }
 
     private fun runJob(job: Job) {
@@ -645,7 +727,15 @@ object Backend {
                 if (files.isNotEmpty()) {
                     job.step = "Guardando en tu galeria"; job.speed = ""; job.eta = ""
                     val saved = files.mapNotNull { saveToMedia(it) }
-                    if (lyrText != null) saved.forEach { if (it.kind == "audio") it.lyrics = lyrText }
+                    saved.forEach { it ->
+                        if (it.kind == "audio") {
+                            val meta = o.optJSONObject("m")
+                            it.artist = meta?.optString("artist", "") ?: ""
+                            it.track = meta?.optString("track", "") ?: ""
+                            it.duration = meta?.optDouble("dur", 0.0) ?: 0.0
+                            if (lyrText != null) it.lyrics = lyrText
+                        }
+                    }
                     tmp.deleteRecursively()
                     if (saved.isEmpty()) { firstErr = "No se pudo guardar en la galeria/musica"; break }
                     index.addAll(saved); saveIndex()
@@ -658,9 +748,15 @@ object Backend {
                 lyr = null
             } catch (e: Exception) {
                 if (job.cancel) break
-                if (firstErr == null) firstErr = (e.message ?: e.toString()).take(220)
+                val message = (e.message ?: e.toString()).take(220)
+                if (firstErr == null) firstErr = message
                 fast = false
                 lyr = null
+                // No probar seis clientes seguidos cuando YouTube responde HTTP 429.
+                if (isRateLimited(e)) {
+                    firstErr = "YouTube está limitando las solicitudes (HTTP 429). Espera unos minutos y vuelve a intentarlo."
+                    break
+                }
             }
         }
         tmp.deleteRecursively()

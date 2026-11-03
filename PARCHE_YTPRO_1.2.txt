@@ -1,0 +1,17 @@
+YTPro — Parche de estabilidad 1.2
+
+Cambios:
+- HTTP 429: detiene los intentos con otros clientes de YouTube cuando se detecta limitación temporal, para evitar aumentar las solicitudes.
+- Formatos: selección de video con alternativas H.264/AAC, otros códecs y formato progresivo.
+- Mensajes: explica cuándo YouTube devuelve solo imágenes o no ofrece una pista de video.
+- LRCLIB: compara título, artista y duración para reducir coincidencias con versiones incorrectas.
+- Biblioteca: guarda artista, pista y duración para que la búsqueda manual de letras pueda validar mejor la versión.
+- LRC: aplica [offset], admite varias marcas de tiempo en una línea y ordena las líneas.
+- Reproductor: reduce el movimiento de scroll para evitar animaciones superpuestas.
+
+IMPORTANTE:
+- Este ZIP no incluye app/ytpro.p12 (clave privada de firma). No la borres del repositorio privado.
+- Extrae el ZIP encima del proyecto existente, sin borrar app/ytpro.p12.
+- No se ha compilado ni probado en un dispositivo. Debe validarse con GitHub Actions y reproducción real.
+- Un HTTP 429 depende del límite aplicado por YouTube; el parche evita reintentos agresivos, pero no elimina el límite.
+- Si YouTube devuelve únicamente imágenes, no existe una pista de video disponible en esa respuesta; el selector no puede fabricar una pista ausente.

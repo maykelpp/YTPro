@@ -171,7 +171,7 @@ function drawLib(){const q=($('#lq').value||'').toLowerCase();$('#lf').innerHTML
  <div class=row>${f.kind!=='text'?`<button class=s onclick="pv('${f.id}')">Reproducir</button>`:''}<button class=s onclick="Android.open('${f.id}')">Abrir con…</button><button class=s onclick="Android.share('${f.id}')">Compartir</button><button class="s bad" onclick="del('${f.id}')">Borrar</button></div></div></div>`).join('')||'<div class=gl><span class=mut>Nada por aquí todavía.</span></div>'}
 const setLf=v=>{LF=v;drawLib()};
 let LY=[],lyCur=-1;
-const parseLrc=t=>{const L=[];for(const ln of(t||'').split(/\r?\n/)){const m=ln.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);if(m&&m[3])L.push([+m[1]*60+ +m[2],m[3]])}return L};
+const parseLrc=t=>{const lines=(t||'').split(/\r?\n/);let offset=0;for(const ln of lines){const om=ln.match(/^\[offset:([+-]?\d+)\]/i);if(om){offset=parseInt(om[1],10)/1000;break}}const L=[];for(const ln of lines){const tags=[...ln.matchAll(/\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]/g)];if(!tags.length)continue;const text=ln.replace(/(?:\[\d{1,3}:\d{2}(?:\.\d{1,3})?\])+/g,'').trim();if(!text)continue;for(const m of tags){const frac=m[3]?Number('0.'+m[3]):0;const sec=Number(m[1])*60+Number(m[2])+frac+offset;if(sec>=0)L.push([sec,text])}}return L.sort((a,b)=>a[0]-b[0])};
 async function pv(id){const f=LIB.find(x=>x.id===id),u='/files/'+id;lyCur=-1;
  if(f.kind==='audio'){$('#pvb').innerHTML=`<div id=lyp class=lyp></div><audio id=pa src="${u}" controls autoplay></audio>`;$('#pv').showModal();loadLy(id);const a=$('#pa');a.ontimeupdate=()=>lyTick(a.currentTime)}
  else{$('#pvb').innerHTML=f.kind==='video'?`<video src="${u}" controls autoplay playsinline></video>`:`<img src="${u}" alt="">`;$('#pv').showModal()}}
@@ -179,9 +179,9 @@ async function loadLy(id){let t='';try{t=(await api('/api/lyrics?id='+id)).text}
  LY=parseLrc(t);const p=$('#lyp');if(!p)return;
  if(LY.length)p.innerHTML=LY.map((l,i)=>`<div class=ll id=ll${i}>${esc(l[1])}</div>`).join('');
  else if(t)p.innerHTML=t.split(/\r?\n/).map(l=>`<div class=ll style="color:#c8cbe0">${esc(l)}</div>`).join('');
- else{const f=LIB.find(x=>x.id===id)||{};p.innerHTML=`<div class=mut>Sin letra todavía. Búscala:</div><input type=text id=lfq value="${esc((f.name||'').replace(/\.\w+$/,''))}"><div class=row><button class="s neon" onclick="findLy('${id}')">Buscar letra</button></div><div id=lfm class=mut></div>`}}
+ else{const f=LIB.find(x=>x.id===id)||{};p.innerHTML=`<div class=mut>Sin letra todavía. Búscala:</div><input type=text id=lfq value="${esc((f.name||'').replace(/\.\w+$/,''))}"><div class=row><button class="s neon" onclick="findLy('${id}')">Buscar letra</button></div><div id=lfm class=mut></div>`}const a=$('#pa');if(a)lyTick(a.currentTime)}
 async function findLy(id){$('#lfm').textContent='Buscando…';try{const r=await post('/api/lyrics/find',{id,q:$('#lfq').value});if(r.ok){loadLy(id);loadLib()}else $('#lfm').textContent='No encontré letra. Prueba con «artista canción».'}catch(e){$('#lfm').textContent=e.message}}
-function lyTick(t){if(!LY.length)return;let k=-1;for(let i=0;i<LY.length;i++){if(LY[i][0]<=t)k=i;else break}if(k===lyCur)return;lyCur=k;document.querySelectorAll('.ll').forEach((e,i)=>e.classList.toggle('on',i===k));const e=document.getElementById('ll'+k);if(e)e.scrollIntoView({block:'center',behavior:'smooth'})}
+function lyTick(t){if(!LY.length)return;let k=-1;for(let i=0;i<LY.length;i++){if(LY[i][0]<=t)k=i;else break}if(k===lyCur)return;lyCur=k;document.querySelectorAll('.ll').forEach((e,i)=>e.classList.toggle('on',i===k));const e=document.getElementById('ll'+k);if(e)e.scrollIntoView({block:'center',behavior:'auto'})}
 function closePv(){$('#pv').close();$('#pvb').innerHTML='';LY=[];lyCur=-1}
 async function del(id){if(!confirm('¿Borrar este archivo de tu galería?'))return;await api('/api/library?id='+id,{method:'DELETE'});loadLib()}
 // ---------- Ajustes
