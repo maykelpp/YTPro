@@ -19,6 +19,10 @@ import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -27,8 +31,9 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-class Entry(val id: String, val name: String, val uri: String, val kind: String, val size: Long, val mime: String, val date: Long) {
+class Entry(val id: String, val name: String, val uri: String, val kind: String, val size: Long, val mime: String, val date: Long, @Volatile var lyrics: String = "") {
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("kind", kind).put("size", size).put("date", date)
+        .put("hasLyrics", lyrics.isNotEmpty())
 }
 
 class Job(val id: String, val url: String, var title: String, val opts: JSONObject) {
@@ -216,6 +221,18 @@ object Backend {
             p == "/api/app/check" -> json(Updater.check(q("force") == "1"))
             p == "/api/app/update" && m == Method.POST -> json(Updater.start())
             p == "/api/app/update/status" -> json(Updater.status())
+            p == "/api/lyrics" && m == Method.GET -> json(JSONObject().put("text", entry(q("id"))?.lyrics ?: ""))
+            p == "/api/lyrics/find" && m == Method.POST -> {
+                val b = body()
+                val e = entry(b.optString("id"))
+                if (e == null) text(Response.Status.NOT_FOUND, "no") else {
+                    val qn = b.optString("q").ifEmpty { e.name.substringBeforeLast('.') }
+                    val (a, t) = splitArtist("", qn)
+                    val r = fetchLyrics(a, t, 0.0)
+                    if (r != null) { e.lyrics = r; saveIndex() }
+                    json(JSONObject().put("ok", r != null))
+                }
+            }
             p == "/api/search" -> json(search(q("q")))
             p == "/api/info" && m == Method.POST -> json(info(body().getString("url").trim()))
             p == "/api/download" && m == Method.POST -> download(body())
@@ -247,7 +264,7 @@ object Backend {
     private fun settings() = JSONObject().put("parallel", prefs.getInt("parallel", 2)).put("anti", prefs.getBoolean("anti", false))
         .put("dest", prefs.getString("dest", "media")).put("wifi", prefs.getBoolean("wifi", false))
         .put("autoUpdate", prefs.getBoolean("autoUpdate", true)).put("aria", prefs.getBoolean("aria", true))
-        .put("ariaOk", ariaOk).put("updUrl", prefs.getString("updUrl", "http://127.0.0.1:5001"))
+        .put("lyrics", prefs.getBoolean("lyrics", true)).put("ariaOk", ariaOk).put("updUrl", prefs.getString("updUrl", "http://127.0.0.1:5001"))
 
     private fun applySettings(b: JSONObject) {
         val e = prefs.edit()
@@ -256,6 +273,7 @@ object Backend {
         if (b.has("wifi")) e.putBoolean("wifi", b.optBoolean("wifi"))
         if (b.has("autoUpdate")) e.putBoolean("autoUpdate", b.optBoolean("autoUpdate"))
         if (b.has("aria")) e.putBoolean("aria", b.optBoolean("aria"))
+        if (b.has("lyrics")) e.putBoolean("lyrics", b.optBoolean("lyrics"))
         if (b.has("updUrl")) {
             val u = b.optString("updUrl").trim().trimEnd('/')
             if (Regex("https?://[A-Za-z0-9.\\-]+(:\\d+)?").matches(u)) { e.putString("updUrl", u); Updater.reset() }
@@ -279,7 +297,7 @@ object Backend {
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
                 index.add(Entry(o.getString("id"), o.getString("name"), o.getString("uri"), o.getString("kind"),
-                    o.getLong("size"), o.getString("mime"), o.getLong("date")))
+                    o.getLong("size"), o.getString("mime"), o.getLong("date"), o.optString("lyrics", "")))
             }
         } catch (_: Exception) {}
     }
@@ -289,7 +307,7 @@ object Backend {
         val a = JSONArray()
         index.forEach {
             a.put(JSONObject().put("id", it.id).put("name", it.name).put("uri", it.uri).put("kind", it.kind)
-                .put("size", it.size).put("mime", it.mime).put("date", it.date))
+                .put("size", it.size).put("mime", it.mime).put("date", it.date).put("lyrics", it.lyrics))
         }
         File(appCtx.filesDir, "index.json").writeText(a.toString())
     }
@@ -401,6 +419,8 @@ object Backend {
                     .put("channel", j.str("channel").ifEmpty { j.str("uploader") })
                     .put("dur", fmtDur(j.optDouble("duration", 0.0))).put("thumb", j.str("thumbnail"))
                     .put("heights", JSONArray(hs.sortedDescending())).put("count", count)
+                    .put("artist", j.str("artist").ifEmpty { j.str("creator") }).put("track", j.str("track").ifEmpty { j.str("title") })
+                    .put("durSec", j.optDouble("duration", 0.0))
             } catch (e: Exception) { err = e }
         }
         throw err ?: Exception("No se pudo analizar el link")
@@ -424,7 +444,10 @@ object Backend {
             .put("meta", b.optBoolean("meta", true)).put("playlist", b.optBoolean("playlist", false))
             .put("t0", b.optString("t0").take(12)).put("t1", b.optString("t1").take(12))
             .put("sb", b.optBoolean("sb", false)).put("chapters", b.optBoolean("chapters", false))
-            .put("norm", b.optBoolean("norm", false))
+            .put("norm", b.optBoolean("norm", false)).put("lyrics", b.optBoolean("lyrics", true))
+            .put("m", JSONObject().put("artist", b.optJSONObject("m")?.optString("artist", "")?.take(100) ?: "")
+                .put("track", b.optJSONObject("m")?.optString("track", "")?.take(150) ?: "")
+                .put("dur", b.optJSONObject("m")?.optDouble("dur", 0.0) ?: 0.0))
             .put("rate", pick(b.optString("rate"), listOf("500K", "1M", "2M", "5M"), ""))
             .put("items", b.optString("items").trim().let { if (Regex("[0-9,\\-: ]{0,40}").matches(it)) it else "" })
         val title = b.optString("title").ifEmpty { url }.take(150)
@@ -434,7 +457,7 @@ object Backend {
         return json(JSONObject().put("id", job.id))
     }
 
-    private fun args(r: YoutubeDLRequest, o: JSONObject, tmp: File, cl: String?, fast: Boolean) {
+    private fun args(r: YoutubeDLRequest, o: JSONObject, tmp: File, cl: String?, fast: Boolean, lyr: String?) {
         val kind = o.getString("kind")
         val codec = o.getString("acodec")
         val playlist = o.getBoolean("playlist")
@@ -499,12 +522,77 @@ object Backend {
             }
             if (o.optBoolean("chapters")) r.addOption("--split-chapters")
         }
+        if (kind == "audio" && lyr != null) {
+            // La letra viaja como etiqueta "lyrics" (USLT en MP3, (c)lyr en M4A): tu reproductor la lee al reescanear.
+            if (!o.optBoolean("meta", true)) r.addOption("--embed-metadata")
+            r.addOption("--parse-metadata", lyr.replace("%", "%%").replace(":", "\\:") + ":(?s)(?P<meta_lyrics>.+)")
+        }
         val s = secs(o.optString("t0"))
         val e = secs(o.optString("t1"))
         if (s != null || e != null) {
             r.addOption("--download-sections", "*${s ?: 0.0}-${e ?: "inf"}")
             r.addOption("--force-keyframes-at-cuts")
         }
+    }
+
+    // ------------------------------------------------------------ letras sincronizadas (LRCLIB) -> se incrustan en el audio
+    private fun lrcJson(path: String): Any? = try {
+        val c = URL("https://lrclib.net/api/$path").openConnection() as HttpURLConnection
+        c.connectTimeout = 4000
+        c.readTimeout = 7000
+        c.setRequestProperty("User-Agent", "YTPro/3 (uso personal)")
+        try { if (c.responseCode != 200) null else JSONTokener(c.inputStream.bufferedReader().use { it.readText() }).nextValue() }
+        finally { c.disconnect() }
+    } catch (e: Exception) { null }
+
+    private fun cleanTitle(t: String): String = t.replace(Regex("[\\(\\[].*?[\\)\\]]"), " ")
+        .replace(Regex("(?i)\\b(official|oficial|video|lyrics?|letra|audio|hd|4k|hq|remaster(ed)?|karaoke|topic)\\b"), " ")
+        .replace(Regex("\\s+"), " ").trim(' ', '-', '|')
+
+    private fun splitArtist(artist: String, track: String): Pair<String, String> {
+        if (track.contains(" - ")) { val p = track.split(" - ", limit = 2); return p[0].trim() to p[1].trim() }
+        return artist to track
+    }
+
+    /** Devuelve el texto de la letra (sincronizada si existe) o null. */
+    private fun fetchLyrics(artist: String, rawTitle: String, dur: Double): String? {
+        val title = cleanTitle(rawTitle)
+        fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+        if (artist.isNotEmpty() && title.isNotEmpty() && dur > 0) {
+            val j = lrcJson("get?artist_name=${enc(artist)}&track_name=${enc(title)}&duration=${dur.toInt()}") as? JSONObject
+            val t = if (j == null) null else j.str("syncedLyrics").ifEmpty { j.str("plainLyrics") }
+            if (!t.isNullOrEmpty()) return t
+        }
+        val items = mutableListOf<JSONObject>()
+        for (q in listOf("$artist $title".trim(), title).distinct()) {
+            val a = lrcJson("search?q=${enc(q)}") as? JSONArray ?: continue
+            for (i in 0 until a.length()) items.add(a.getJSONObject(i))
+            if (items.any { it.str("syncedLyrics").isNotEmpty() }) break
+        }
+        val synced = items.filter { it.str("syncedLyrics").isNotEmpty() }
+        if (synced.isNotEmpty()) {
+            val best = synced.minByOrNull { Math.abs(it.optDouble("duration", dur) - dur) }!!
+            return best.str("syncedLyrics")
+        }
+        return items.firstOrNull { it.str("plainLyrics").isNotEmpty() }?.str("plainLyrics")
+    }
+
+    private fun lyricsFor(job: Job): String? {
+        val m = job.opts.optJSONObject("m")
+        var artist = m?.optString("artist", "") ?: ""
+        var track = m?.optString("track", "") ?: ""
+        var dur = m?.optDouble("dur", 0.0) ?: 0.0
+        if (track.isEmpty()) {
+            val r = YoutubeDLRequest(job.url)
+            r.addOption("--no-playlist"); r.addOption("--skip-download"); r.addOption("--dump-single-json")
+            val j = JSONObject(YoutubeDL.getInstance().execute(r).out)
+            artist = j.str("artist").ifEmpty { j.str("creator") }
+            track = j.str("track").ifEmpty { j.str("title") }
+            dur = j.optDouble("duration", 0.0)
+            if (artist.isEmpty()) artist = j.str("channel").ifEmpty { j.str("uploader") }.removeSuffix(" - Topic")
+        }
+        val (a, t) = splitArtist(artist, track)
+        return fetchLyrics(a, t, dur)
     }
 
     private fun hint(e: String?): String = when {
@@ -525,13 +613,19 @@ object Backend {
         var firstErr: String? = null
         var fast = prefs.getBoolean("aria", true) && ariaOk
         try { awaitEngine() } catch (e: Exception) { firstErr = e.message }
+        var lyr: String? = null
+        if (firstErr == null && kind == "audio" && o.optBoolean("lyrics", true) && prefs.getBoolean("lyrics", true) && !o.getBoolean("playlist")) {
+            job.step = "Buscando letra"
+            try { lyr = lyricsFor(job) } catch (_: Exception) {}
+        }
+        val lyrText = lyr
         if (firstErr == null) for (cl in clients(job.url, true)) {
             if (job.cancel) break
             tmp.deleteRecursively(); tmp.mkdirs()
             job.pct = 0.0
             try {
                 val r = YoutubeDLRequest(job.url)
-                args(r, o, tmp, cl, fast)
+                args(r, o, tmp, cl, fast, lyr)
                 YoutubeDL.getInstance().execute(r, job.id) { p, eta, line ->
                     val ar = Regex("\\((\\d{1,3})%\\).*?DL:(\\S+)(?:.*?ETA:(\\S+))?").find(line)
                     if (ar != null) {
@@ -551,6 +645,7 @@ object Backend {
                 if (files.isNotEmpty()) {
                     job.step = "Guardando en tu galeria"; job.speed = ""; job.eta = ""
                     val saved = files.mapNotNull { saveToMedia(it) }
+                    if (lyrText != null) saved.forEach { if (it.kind == "audio") it.lyrics = lyrText }
                     tmp.deleteRecursively()
                     if (saved.isEmpty()) { firstErr = "No se pudo guardar en la galeria/musica"; break }
                     index.addAll(saved); saveIndex()
@@ -560,10 +655,12 @@ object Backend {
                 }
                 if (firstErr == null) firstErr = "No se genero ningun archivo"
                 fast = false
+                lyr = null
             } catch (e: Exception) {
                 if (job.cancel) break
                 if (firstErr == null) firstErr = (e.message ?: e.toString()).take(220)
                 fast = false
+                lyr = null
             }
         }
         tmp.deleteRecursively()

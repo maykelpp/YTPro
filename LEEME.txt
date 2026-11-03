@@ -5,3 +5,7 @@ YT Pro v3 (APK con servidor interno, interfaz neon, actualizaciones por tu web l
 - Cada compilacion de GitHub sube sola el numero de version (YTPro-<n>.apk) y lo publica en Releases.
 - Publicar una actualizacion: abre ytdl_pro.py > "Mantenimiento de la APK" > sube YTPro-<n>.apk.
 - Si el servidor de mantenimiento esta apagado, la APK funciona normal.
+
+v3.1 - Letras: al descargar audio se busca la letra sincronizada (LRCLIB) y se guarda DENTRO del archivo
+(MP3: USLT, M4A: (c)lyr). Tu reproductor la muestra al reescanear la biblioteca. Tambien se ve en
+Biblioteca > Reproducir (visor tipo "Ahora en pantalla").
