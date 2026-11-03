@@ -1,0 +1,14 @@
+YTPro 1.3 - Actualizacion de interfaz y reproductor
+
+CAMBIOS
+- Rediseño visual de la interfaz manteniendo las pantallas y funciones existentes.
+- Nuevo reproductor de audio inspirado en la referencia del usuario: portada visual, titulo/artista, barra de progreso, tiempo, controles anterior/pausa/siguiente, volumen y botones de aleatorio/repetir.
+- Letras sincronizadas integradas en el reproductor y accesibles desde el boton de letras.
+- La biblioteca expone artista, titulo y duracion guardados para mostrarlos en el reproductor.
+- Ajuste moderado de fragmentos concurrentes de 8 a 10. aria2 continua activado por la preferencia existente; la velocidad real depende de la fuente, red y disponibilidad del servidor.
+
+NOTAS
+- La portada del reproductor es una portada visual generica de YTPro; no extrae la caratula incrustada del archivo de audio.
+- No se garantiza mayor velocidad en todos los sitios. No se incrementaron los reintentos ni se fuerza eludir limites 429.
+- No incluye app/ytpro.p12. Conserva tu copia privada de esa clave de firma fuera del ZIP.
+- Cambios revisados estaticamente; no se ha ejecutado una compilacion Android en este entorno.

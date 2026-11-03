@@ -40,7 +40,7 @@ class Entry(
     @Volatile var duration: Double = 0.0
 ) {
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("kind", kind).put("size", size).put("date", date)
-        .put("hasLyrics", lyrics.isNotEmpty())
+        .put("hasLyrics", lyrics.isNotEmpty()).put("artist", artist).put("track", track).put("duration", duration)
 }
 
 class Job(val id: String, val url: String, var title: String, val opts: JSONObject) {
@@ -495,7 +495,7 @@ object Backend {
         r.addOption("-P", tmp.absolutePath)
         r.addOption("-o", (if (playlist) "%(playlist_index)02d - " else "") + base + ".%(ext)s")
         r.addOption("--retries", "5"); r.addOption("--fragment-retries", "5")
-        r.addOption("--concurrent-fragments", "8"); r.addOption("--throttled-rate", "100K"); r.addOption("-4")
+        r.addOption("--concurrent-fragments", "10"); r.addOption("--throttled-rate", "100K"); r.addOption("-4")
         if (prefs.getBoolean("anti", false)) r.addOption("--http-chunk-size", "10M")
         r.addOption("--newline")
         if (fast) {
