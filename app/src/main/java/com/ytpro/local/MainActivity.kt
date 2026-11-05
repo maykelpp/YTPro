@@ -56,9 +56,6 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         wv = WebView(this)
         setContentView(wv)
-<<<<<<< HEAD
-        wv.setBackgroundColor(0xFF05060F.toInt())
-=======
         wv.setBackgroundColor(0xFF05060F.toInt())
         configureSystemBars()
         wv.setOnApplyWindowInsetsListener { view, insets ->
