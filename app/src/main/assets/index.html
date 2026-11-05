@@ -102,6 +102,15 @@ button.neon{background:linear-gradient(120deg,#91e3f2,#51c4dc);color:#082027;box
 #pv audio{display:none}
 @media(min-width:600px){#pv.player-dialog{height:min(94dvh,850px);margin:auto;border-radius:28px}.player-shell{padding:22px 34px}.album-art{width:min(58vw,310px)}}
 
+ 
+.eq-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin:10px 0}
+.eq-grid label{font-size:.68rem;color:var(--mut);text-align:center}
+.eq-grid input{display:block;width:100%;accent-color:var(--acc);margin:12px 0}
+.mini-player{position:fixed;z-index:45;left:12px;right:12px;bottom:calc(90px + env(safe-area-inset-bottom));max-width:540px;margin:auto;background:#17252b;border:1px solid #5ac9df55;border-radius:18px;padding:10px 14px;display:flex;gap:10px;align-items:center;box-shadow:0 10px 30px #0009}
+.mini-player span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;font-size:.82rem}
+.mini-player button{padding:7px 12px}
+#tagModal{position:fixed;inset:0;z-index:60;background:#000c;display:grid;place-items:center;padding:20px}
+#tagModal .gl{width:min(100%,420px);background:#111b20}
 </style></head><body>
 <div class="bg"></div>
 <div class="top"><div class="logo" style="display:flex;align-items:center;gap:10px"><svg width="28" height="28" viewBox="0 0 108 108" aria-hidden="true"><rect width="108" height="108" rx="26" fill="#0b0d22"/><circle cx="54" cy="54" r="30" fill="none" stroke="#8a5cff" stroke-width="5"/><path d="M54 36v28M42 54l12 12 12-12" fill="none" stroke="#00e5ff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>YT<b>PRO</b></span></div><div class="chip" id="eng">Motor: iniciando…</div></div>
@@ -118,6 +127,31 @@ button.neon{background:linear-gradient(120deg,#91e3f2,#51c4dc);color:#082027;box
 <section class="view" id="v-lib"><h2>Biblioteca</h2>
  <div class="gl"><input type="text" id="lq" placeholder="Buscar en tu biblioteca" oninput="drawLib()">
  <div class="chips" style="margin-top:8px" id="lf"></div><small id="lsum" class="mut"></small></div><div id="lib"></div></section>
+ <div class="chips" style="margin-top:8px" id="lf"></div><small id="lsum" class="mut"></small></div><div id="lib"></div>
+ <h2>YTPro Studio · Herramientas 2.0</h2>
+ <div class="gl" id="studio">
+  <div class="lbl">Ecualizador de 5 bandas</div>
+  <div class="eq-grid">
+   <label>60 Hz<input id="eq0" type="range" min="-12" max="12" value="0" oninput="setEq(0,this.value)"></label>
+   <label>230 Hz<input id="eq1" type="range" min="-12" max="12" value="0" oninput="setEq(1,this.value)"></label>
+   <label>910 Hz<input id="eq2" type="range" min="-12" max="12" value="0" oninput="setEq(2,this.value)"></label>
+   <label>3.6 kHz<input id="eq3" type="range" min="-12" max="12" value="0" oninput="setEq(3,this.value)"></label>
+   <label>14 kHz<input id="eq4" type="range" min="-12" max="12" value="0" oninput="setEq(4,this.value)"></label>
+  </div>
+  <div class="row"><button class="s" onclick="eqPreset('flat')">Plano</button><button class="s" onclick="eqPreset('bass')">Graves</button><button class="s" onclick="eqPreset('vocal')">Voces</button><button class="s" onclick="eqPreset('treble')">Agudos</button></div>
+  <div class="lbl">Visualizador de audio 3D ligero</div><canvas id="viz" width="640" height="150" style="width:100%;height:130px;background:#080e11;border-radius:14px"></canvas>
+  <div class="row"><button class="s" onclick="toggleViz()">Activar / pausar visualizador 3D</button><button class="s" onclick="toggleMini()">Mini reproductor</button></div>
+ </div>
+ <div class="gl">
+  <div class="lbl">Temporizador de reproducción</div>
+  <div class="row"><input id="timerMin" type="number" min="1" max="240" value="30" style="width:100px"><button class="s neon" onclick="startSleepTimer()">Iniciar temporizador</button><button class="s" onclick="stopSleepTimer()">Cancelar</button></div><small id="timerState" class="mut">Sin temporizador activo.</small>
+  <div class="lbl">Herramientas de biblioteca</div>
+  <div class="row"><button class="s" onclick="openTagEditor()">Editar etiquetas ID3</button><button class="s" onclick="showStats()">Estadísticas musicales</button><button class="s" onclick="mixPlaylist()">Mezclar lista</button></div>
+  <div class="row"><button class="s" onclick="document.getElementById('folderPick').click()">Explorar carpeta de música</button><button class="s" onclick="toggleSmartShuffle()">Smart Shuffle: <span id="smartState">OFF</span></button></div>
+  <input id="folderPick" type="file" accept="audio/*" multiple webkitdirectory hidden onchange="importFolder(this.files)">
+  <div id="studioMsg" class="mut" style="margin-top:8px"></div>
+ </div>
+</section>
 <section class="view" id="v-set"><h2>Apariencia</h2><div class="gl"><div class="lbl" style="margin-top:0">Color neón</div><div class="sw" id="sw"></div>
  <label class="tg"><span>Reducir animaciones<small>Menos movimiento y menos batería</small></span><input type="checkbox" id="s-rm" onchange="setP('rm',this.checked)"><i></i></label></div>
  <h2>Descargas</h2><div class="gl"><div class="lbl" style="margin-top:0">Descargas simultáneas</div><div class="chips" id="s-par"></div>
@@ -211,6 +245,7 @@ async function retry(i){const j=JOBS[i];await post('/api/download',{url:j.url,ti
 const KL={video:'VID',audio:'MP3',image:'IMG',text:'SRT'};
 async function loadLib(){try{LIB=await api('/api/library');drawLib()}catch(e){}}
 function drawLib(){const q=($('#lq').value||'').toLowerCase();$('#lf').innerHTML=chips('lf',[['all','Todo'],['video','Video'],['audio','Audio'],['image','Imágenes'],['text','Subs']],LF,'setLf');
+function drawLib(){if($('#eq0'))(P.eq||[0,0,0,0,0]).forEach((v,i)=>$('#eq'+i).value=v);const q=($('#lq').value||'').toLowerCase();$('#lf').innerHTML=chips('lf',[['all','Todo'],['video','Video'],['audio','Audio'],['image','Imágenes'],['text','Subs']],LF,'setLf');
  const l=LIB.filter(f=>(LF==='all'||f.kind===LF)&&f.name.toLowerCase().includes(q));$('#lsum').textContent=l.length+' archivos · '+mb(l.reduce((a,f)=>a+f.size,0));
  $('#lib').innerHTML=l.map(f=>`<div class="gl job"><div class=k>${KL[f.kind]||'FILE'}</div><div><div class=t2>${esc(f.name)}</div><small>${mb(f.size)}${f.hasLyrics?'<span class=lb>♪ letra</span>':''}</small>
  <div class=row>${f.kind!=='text'?`<button class=s onclick="pv('${f.id}')">Reproducir</button>`:''}<button class=s onclick="Android.open('${f.id}')">Abrir con…</button><button class=s onclick="Android.share('${f.id}')">Compartir</button><button class="s bad" onclick="del('${f.id}')">Borrar</button></div></div></div>`).join('')||'<div class=gl><span class=mut>Nada por aquí todavía.</span></div>'}
@@ -222,6 +257,10 @@ function playerMarkup(f){const title=f.track||f.name.replace(/\.[^.]+$/,'');cons
 async function pv(id){const f=LIB.find(x=>x.id===id);if(!f)return;if(f.kind!=='audio'){const u='/files/'+id;$('#pvb').innerHTML=f.kind==='video'?`<video src="${u}" controls autoplay playsinline></video>`:`<img src="${u}" alt="">`;$('#pv').showModal();return}
  PLAYLIST=LIB.filter(x=>x.kind==='audio');PLAYIDX=PLAYLIST.findIndex(x=>x.id===id);await playCurrent();}
 async function playCurrent(){const f=PLAYLIST[PLAYIDX];if(!f)return;lyCur=-1;LY=[];$('#pvb').innerHTML=playerMarkup(f);if(!$('#pv').open)$('#pv').showModal();const a=$('#pa');a.volume=Number($('#vol').value||1);a.addEventListener('timeupdate',()=>{if(!a.duration)return;$('#seek').value=String(Math.round(a.currentTime/a.duration*1000));$('#ptime').textContent=fmtTime(a.currentTime);lyTick(a.currentTime)});a.addEventListener('loadedmetadata',()=>{$('#pduration').textContent=fmtTime(a.duration)});a.addEventListener('play',()=>$('#playbtn').textContent='Ⅱ');a.addEventListener('pause',()=>$('#playbtn').textContent='▶');a.addEventListener('ended',()=>{if(repeatOn){a.currentTime=0;a.play()}else playStep(1)});loadLy(f.id);a.play().catch(()=>{$('#playbtn').textContent='▶'});}
+async function playCurrent(){const f=PLAYLIST[PLAYIDX];if(!f)return;lyCur=-1;LY=[];$('#pvb').innerHTML=playerMarkup(f);if(miniOn)$('#miniTitle').textContent=f.track||f.name;if(!$('#pv').open)$('#pv').showModal();const a=$('#pa');a.volume=Number($('#vol').value||1);
+
+ let lastStatTime=0;a.addEventListener('timeupdate',()=>{if(!a.duration)return;if(!a.paused&&a.currentTime>lastStatTime){studioStats.seconds+=Math.min(2,a.currentTime-lastStatTime);lastStatTime=a.currentTime;saveStats()}$('#seek').value=String(Math.round(a.currentTime/a.duration*1000));$('#ptime').textContent=fmtTime(a.currentTime);lyTick(a.currentTime)});a.addEventListener('loadedmetadata',()=>{$('#pduration').textContent=fmtTime(a.duration)});a.addEventListener('play',()=>{$('#playbtn').textContent='Ⅱ';ensureAudioGraph();});
+ a.addEventListener('playing',()=>{registerPlay(f);setupMediaSession(f);setupGestures();});a.addEventListener('pause',()=>$('#playbtn').textContent='▶');a.addEventListener('ended',()=>{if(repeatOn){a.currentTime=0;a.play()}else playStep(1)});loadLy(f.id);a.play().catch(()=>{$('#playbtn').textContent='▶'});}
 function togglePlay(){const a=$('#pa');if(!a)return;if(a.paused)a.play().catch(()=>{});else a.pause()}
 function seekPlayer(v){const a=$('#pa');if(a&&a.duration)a.currentTime=(Number(v)/1000)*a.duration}
 function setVolume(v){const a=$('#pa');if(a)a.volume=Number(v)}
@@ -238,6 +277,60 @@ async function findLy(id){const msg=$('#lfm');if(msg)msg.textContent='Buscando�
 function lyTick(t){if(!LY.length)return;let k=-1;for(let i=0;i<LY.length;i++){if(LY[i][0]<=t)k=i;else break}if(k===lyCur)return;lyCur=k;document.querySelectorAll('#lyp .ll').forEach((e,i)=>e.classList.toggle('on',i===k));const e=document.getElementById('ll'+k);if(e&& !$('#lyp').hidden)e.scrollIntoView({block:'center',behavior:'smooth'})}
 function closePv(){const a=$('#pa');if(a)a.pause();if($('#pv').open)$('#pv').close();$('#pvb').innerHTML='';LY=[];lyCur=-1;PLAYLIST=[];PLAYIDX=-1}
 async function del(id){if(!confirm('¿Borrar este archivo de tu galería?'))return;await api('/api/library?id='+id,{method:'DELETE'});loadLib()}
+
+// ---------- YTPro 2.0: herramientas musicales locales
+const STKEY='ytpro20_studio', EQKEY='ytpro20_eq';
+let studioStats={plays:0,seconds:0,lastPlayed:'',history:[]},eqNodes=[],audioCtx=null,analyser=null,sourceNode=null,audioSources=new WeakMap(),vizOn=false,vizRAF=0,sleepTimer=null,smartShuffle=false,lastTracks=[],miniOn=false,crossfadeSeconds=3,gestureX=0;
+try{studioStats=Object.assign(studioStats,JSON.parse(localStorage.getItem(STKEY)||'{}'))}catch(e){}
+const saveStats=()=>{try{localStorage.setItem(STKEY,JSON.stringify(studioStats))}catch(e){}};
+function studioMsg(t){const e=$('#studioMsg');if(e)e.textContent=t}
+function setEq(i,v){P.eq=P.eq||[0,0,0,0,0];P.eq[i]=+v;saveP();applyEq()}
+function eqPreset(k){const a={flat:[0,0,0,0,0],bass:[7,5,1,-1,-2],vocal:[-2,1,5,4,1],treble:[-2,-1,0,5,7]}[k]||[0,0,0,0,0];P.eq=a;saveP();a.forEach((v,i)=>{const e=$('#eq'+i);if(e)e.value=v});applyEq()}
+function ensureAudioGraph(){
+ const a=$('#pa');if(!a)return;
+ try{
+  const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+  if(!audioCtx){audioCtx=new AC();analyser=audioCtx.createAnalyser();analyser.fftSize=256;}
+  let graph=audioSources.get(a);
+  if(!graph){
+   const src=audioCtx.createMediaElementSource(a),filters=[],freqs=[60,230,910,3600,14000];let prev=src;
+   freqs.forEach((f,i)=>{const n=audioCtx.createBiquadFilter();n.type=i===0?'lowshelf':i===4?'highshelf':'peaking';n.frequency.value=f;n.Q.value=1;n.gain.value=(P.eq||[0,0,0,0,0])[i]||0;prev.connect(n);prev=n;filters.push(n)});
+   prev.connect(analyser);analyser.connect(audioCtx.destination);graph={src,filters};audioSources.set(a,graph);sourceNode=src;eqNodes=filters;
+  }else{eqNodes=graph.filters;sourceNode=graph.src;}
+  if(audioCtx.state==='suspended')audioCtx.resume();
+  applyEq();
+ }catch(e){studioMsg('Audio avanzado no disponible: '+(e.message||'error de audio'));}
+}
+function applyEq(){if(eqNodes.length)(P.eq||[]).forEach((v,i)=>{if(eqNodes[i])eqNodes[i].gain.value=+v||0})}
+function toggleViz(){vizOn=!vizOn;if(vizOn){ensureAudioGraph();drawViz()}else cancelAnimationFrame(vizRAF)}
+function drawViz(){if(!vizOn)return;const c=$('#viz');if(!c)return;const x=c.getContext('2d'),w=c.width,h=c.height;x.clearRect(0,0,w,h);x.fillStyle='#071116';x.fillRect(0,0,w,h);
+ const data=new Uint8Array(analyser?analyser.frequencyBinCount:48);if(analyser)analyser.getByteFrequencyData(data);
+ const count=36,step=w/count,bw=step*.66,base=h-8;
+ // Barras con caras laterales y perspectiva: visualizador 2.5D ligero, sin WebGL.
+ for(let i=0;i<count;i++){const raw=data[Math.floor(i*data.length/count)]||0,bar=Math.max(2,raw/255*(h*.78));const px=i*step+step*.12,py=base-bar,depth=7;
+  x.fillStyle='#36a9c4';x.beginPath();x.moveTo(px+bw,py);x.lineTo(px+bw+depth,py-depth);x.lineTo(px+bw+depth,base-depth);x.lineTo(px+bw,base);x.fill();
+  x.fillStyle='#8be5f1';x.fillRect(px,py,bw,bar);x.fillStyle='#17677e';x.beginPath();x.moveTo(px,py);x.lineTo(px+depth,py-depth);x.lineTo(px+bw+depth,py-depth);x.lineTo(px+bw,py);x.fill();
+ }
+ vizRAF=requestAnimationFrame(drawViz)}
+function startSleepTimer(){const n=Math.max(1,Math.min(240,Number($('#timerMin').value)||30));clearTimeout(sleepTimer);$('#timerState').textContent='Se pausará en '+n+' minutos.';sleepTimer=setTimeout(()=>{const a=$('#pa');if(a)a.pause();$('#timerState').textContent='Temporizador finalizado.';},n*60000)}
+function stopSleepTimer(){clearTimeout(sleepTimer);sleepTimer=null;$('#timerState').textContent='Temporizador cancelado.'}
+function toggleMini(){miniOn=!miniOn;$('#miniPlayer').hidden=!miniOn;const f=PLAYLIST[PLAYIDX];$('#miniTitle').textContent=f?(f.track||f.name):'YTPro · Reproductor'}
+function closeMini(){miniOn=false;$('#miniPlayer').hidden=true}
+function openTagEditor(){const f=PLAYLIST[PLAYIDX]||null;if(!f){studioMsg('Abre una canción del reproductor para editar sus etiquetas locales.');return}
+ let m=document.getElementById('tagModal');if(!m){m=document.createElement('div');m.id='tagModal';document.body.appendChild(m)}
+ m.innerHTML=`<div class="gl"><h3>Etiquetas de canción</h3><label class=lbl>Título</label><input id=tagTitle value="${esc(f.track||f.name)}"><label class=lbl>Artista</label><input id=tagArtist value="${esc(f.artist||'')}"><p class=mut>Se guardan como metadatos locales de YTPro. No reescriben el archivo MP3 original.</p><div class=row><button class=neon onclick="saveTags('${f.id}')">Guardar</button><button onclick="document.getElementById('tagModal').remove()">Cerrar</button></div></div>`
+}
+function saveTags(id){const f=LIB.find(x=>x.id===id);if(!f)return;const tags=JSON.parse(localStorage.getItem('ytpro20_tags')||'{}');tags[id]={track:$('#tagTitle').value.trim(),artist:$('#tagArtist').value.trim()};localStorage.setItem('ytpro20_tags',JSON.stringify(tags));f.track=tags[id].track;f.artist=tags[id].artist;document.getElementById('tagModal').remove();studioMsg('Etiquetas locales guardadas. El archivo original no se modificó.')}
+function showStats(){studioMsg('Reproducciones: '+studioStats.plays+' · Tiempo escuchado: '+Math.floor(studioStats.seconds/60)+' min · Última canción: '+(studioStats.lastPlayed||'—'))}
+function toggleSmartShuffle(){smartShuffle=!smartShuffle;$('#smartState').textContent=smartShuffle?'ON':'OFF';shuffleOn=smartShuffle}
+function mixPlaylist(){if(!LIB.length){studioMsg('Descarga o importa canciones para crear una mezcla.');return}
+ PLAYLIST=LIB.filter(f=>f.kind==='audio');for(let i=PLAYLIST.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[PLAYLIST[i],PLAYLIST[j]]=[PLAYLIST[j],PLAYLIST[i]]}PLAYIDX=0;playCurrent();studioMsg('Mezcla creada con '+PLAYLIST.length+' canciones.')}
+function importFolder(files){const list=[...files].filter(f=>f.type.startsWith('audio/'));if(!list.length){studioMsg('No se encontraron archivos de audio.');return}
+ const msg='Android WebView permite seleccionar archivos, pero no copiarlos a la biblioteca interna desde esta pantalla. Seleccionados: '+list.length+'.';studioMsg(msg)}
+function setupMediaSession(f){if(!('mediaSession'in navigator))return;try{navigator.mediaSession.metadata=new MediaMetadata({title:f.track||f.name,artist:f.artist||'YTPro',album:'Biblioteca local'});navigator.mediaSession.setActionHandler('play',togglePlay);navigator.mediaSession.setActionHandler('pause',togglePlay);navigator.mediaSession.setActionHandler('previoustrack',()=>playStep(-1));navigator.mediaSession.setActionHandler('nexttrack',()=>playStep(1))}catch(e){}}
+function setupGestures(){const p=$('#pvb');if(!p||p.dataset.gestures)return;p.dataset.gestures='1';p.addEventListener('touchstart',e=>{gestureX=e.changedTouches[0].clientX},{passive:true});p.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-gestureX;if(Math.abs(dx)>85)playStep(dx<0?1:-1)},{passive:true})}
+function registerPlay(f){studioStats.plays++;studioStats.lastPlayed=f.track||f.name;studioStats.history.unshift({name:studioStats.lastPlayed,at:Date.now()});studioStats.history=studioStats.history.slice(0,100);saveStats()}
+
 // ---------- Ajustes
 async function loadSet(){try{S=await api('/api/settings')}catch(e){}drawSet();engine();checkApp(false)}
 function drawSet(){$('#sw').innerHTML=ACC.map((a,i)=>`<button class="${P.acc===i?'on':''}" style="background:linear-gradient(135deg,${a[1]},${a[2]})" onclick="setP('acc',${i})" aria-label="${a[0]}"></button>`).join('');
@@ -276,3 +369,7 @@ async function updPoll(){let c;try{c=await api('/api/app/check')}catch(e){return
 theme();drawDock();drawPre();engine();poll();setTimeout(()=>checkApp(false),1500);
 (()=>{const q=new URLSearchParams(location.search),m=((q.get('u')||'')).match(/https?:\/\/\S+/);if(m){history.replaceState(null,'','/');$('#u').value=m[0];analyze()}})();
 </script></body></html>
+theme();drawDock();drawPre();if(P.eq==null)P.eq=[0,0,0,0,0];engine();poll();setTimeout(()=>checkApp(false),1500);
+(()=>{const q=new URLSearchParams(location.search),m=((q.get('u')||'')).match(/https?:\/\/\S+/);if(m){history.replaceState(null,'','/');$('#u').value=m[0];analyze()}})();
+</script></body></html><div id="miniPlayer" class="mini-player" hidden><span id="miniTitle">YTPro · Reproductor</span><button onclick="togglePlay()">Ⅱ</button><button onclick="closeMini()">×</button></div>
+

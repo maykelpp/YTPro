@@ -4,6 +4,10 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.view.View
+import android.view.WindowInsets
+
 import android.provider.Settings
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -52,7 +56,28 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         wv = WebView(this)
         setContentView(wv)
+<<<<<<< HEAD
         wv.setBackgroundColor(0xFF05060F.toInt())
+=======
+        wv.setBackgroundColor(0xFF05060F.toInt())
+        configureSystemBars()
+        wv.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = if (Build.VERSION.SDK_INT >= 30) {
+                insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            } else {
+                @Suppress("DEPRECATION")
+                android.graphics.Insets.of(
+                    insets.systemWindowInsetLeft,
+                    insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight,
+                    insets.systemWindowInsetBottom
+                )
+            }
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        wv.requestApplyInsets()
+
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
         wv.settings.mediaPlaybackRequiresUserGesture = false
@@ -69,6 +94,21 @@ class MainActivity : Activity() {
             }
         }.start()
     }
+
+    @Suppress("DEPRECATION")
+    private fun configureSystemBars() {
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            window.decorView.systemUiVisibility =
+                (View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+        }
+    }
+
 
     private fun openApp(i: Intent?) {
         var q = ""

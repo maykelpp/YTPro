@@ -1,0 +1,19 @@
+YTPro 2.0 — FASE 1: BASE DE COMPATIBILIDAD
+
+Cambios aplicados:
+- minSdk 29: Android 10 como versión mínima.
+- compileSdk 36 y targetSdk 36: compilación orientada a Android 16.
+- Android Gradle Plugin 8.13.2 + Gradle 8.13.
+- Declaración del permiso de notificaciones para Android 13+.
+- Ajuste de barras del sistema / edge-to-edge para Android 15 y 16,
+  manteniendo compatibilidad de código con Android 10–14.
+
+IMPORTANTE:
+- Esta fase prepara la base de compatibilidad; NO significa que las 16
+  funciones estén implementadas todavía.
+- La solicitud de permiso de notificaciones y el servicio real de descargas
+  en segundo plano se implementarán junto con esas funciones.
+- No se incluye ninguna clave privada .p12 en este ZIP.
+- No se ha compilado ni probado en dispositivos físicos en esta sesión.
+- Antes de publicar una actualización firmada, conservar la misma clave
+  privada original del proyecto y usarla en un entorno privado.
