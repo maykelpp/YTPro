@@ -1,8 +1,11 @@
 package com.ytpro.local
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Build
 import android.view.View
@@ -15,11 +18,24 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import org.json.JSONObject
 import java.net.URLEncoder
 
 /** Ventana (WebView) a la interfaz que sirve el servidor interno (Backend.kt). */
 class MainActivity : Activity() {
     private lateinit var wv: WebView
+
+    companion object {
+        @Volatile var instance: MainActivity? = null
+
+        /** Envia un comando del sistema (notificacion, auriculares, pantalla de bloqueo) al reproductor de la interfaz. */
+        fun dispatch(cmd: String) {
+            val a = instance ?: return
+            a.runOnUiThread { a.wv.evaluateJavascript("window.ytpCmd&&ytpCmd(" + JSONObject.quote(cmd) + ")", null) }
+        }
+    }
+
+    private fun audioPerm() = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
 
     inner class Bridge {
         @JavascriptInterface
@@ -49,10 +65,45 @@ class MainActivity : Activity() {
                 startActivity(Intent.createChooser(i, "Compartir"))
             }
         }
+
+        /** El reproductor avisa cuando cambia cancion / play / pausa / seek. */
+        @JavascriptInterface
+        fun mediaState(json: String) { PlaybackService.push(applicationContext, json) }
+
+        /** Selector de carpetas (Storage Access Framework) con permiso persistente. */
+        @JavascriptInterface
+        fun pickFolder() {
+            runOnUiThread {
+                val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                try { startActivityForResult(i, 77) } catch (e: Exception) { Toast.makeText(this@MainActivity, "Este telefono no tiene selector de carpetas", Toast.LENGTH_LONG).show() }
+            }
+        }
+
+        @JavascriptInterface
+        fun reqAudioPerm() { runOnUiThread { requestPermissions(arrayOf(audioPerm()), 78) } }
+
+        @JavascriptInterface
+        fun reqNotifPerm() {
+            if (Build.VERSION.SDK_INT >= 33) runOnUiThread { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 79) }
+        }
+
+        @JavascriptInterface
+        fun hasPerm(kind: String): Boolean = when (kind) {
+            "audio" -> checkSelfPermission(audioPerm()) == PackageManager.PERMISSION_GRANTED
+            "notif" -> Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            else -> false
+        }
+
+        @JavascriptInterface
+        fun openAppSettings() {
+            runOnUiThread { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+        }
     }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        instance = this
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         wv = WebView(this)
         setContentView(wv)
@@ -120,6 +171,34 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         openApp(intent)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri = data?.data
+        if (req == 77 && res == RESULT_OK && uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (e: Exception) {
+                try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            }
+            MusicLib.addFolder(uri)
+            wv.evaluateJavascript("window.ytpPerm&&ytpPerm()", null)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, perms, results)
+        if (code == 78 && results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED) MusicLib.scanAsync()
+        wv.evaluateJavascript("window.ytpPerm&&ytpPerm()", null)
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        PlaybackService.push(applicationContext, "{\"stop\":true}")
+        super.onDestroy()
     }
 
     @Deprecated("Deprecated in Java")

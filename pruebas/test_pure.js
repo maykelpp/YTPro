@@ -1,0 +1,18 @@
+const fs=require('fs');const src=fs.readFileSync('/tmp/work/js/pure.js','utf8');
+const code=src+';module.exports={normS,fmtT,lrcParse,dupGroups,smartShuffle,mergeLists,moveItem,normGain,dbLin,statsOf,EQ_PRESETS}';
+const m={exports:{}};new Function('module',code)(m);const U=m.exports;const assert=require('assert');let n=0;const ok=(c,msg)=>{assert(c,msg);n++};
+ok(U.fmtT(75)==='1:15'&&U.fmtT(3725)==='1:02:05','fmtT');
+const L=U.lrcParse('[00:12.50]hola\n[01:02.00][00:30.25]coro\n[00:05.00]\n[ar:x]\nsin tiempo');
+ok(L.length===3&&L[0][1]==='hola'&&Math.abs(L[0][0]-12.5)<1e-9&&L[1][1]==='coro'&&Math.abs(L[1][0]-30.25)<1e-9&&L[2][0]===62,'lrcParse '+JSON.stringify(L));
+const T=[{id:'a',title:'Si Se Da',artist:'Myke Towers',dur:331,size:100},{id:'b',title:'si se da',artist:'Myke  Towers',dur:332,size:999},{id:'c',title:'Otra',artist:'X',dur:200,size:50},{id:'d',title:'Distinta',artist:'Y',dur:200,size:50},{id:'e',title:'Si Se Da',artist:'Myke Towers',dur:400,size:1}];
+const g=U.dupGroups(T);ok(g.length===2,'dup groups '+g.length);ok(g[0].map(t=>t.id).sort().join()==='a,b','dup por titulo');ok(g[1].map(t=>t.id).sort().join()==='c,d','dup por tamaño');
+const mk=n=>Array.from({length:n},(_,i)=>({id:'t'+i,title:'s'+i,artist:'A'+(i%3)}));let seed=1;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
+const S=U.smartShuffle(mk(30),{},rnd);ok(S.length===30&&new Set(S.map(t=>t.id)).size===30,'shuffle conserva');let adj=0;for(let i=1;i<S.length;i++)if(S[i].artist===S[i-1].artist)adj++;ok(adj<=3,'pocos artistas seguidos: '+adj);
+const pl={t0:50,t1:50};let first=0;for(let r=0;r<200;r++){seed=r+7;const s=U.smartShuffle(mk(10),pl,rnd);if(s.slice(0,3).some(t=>t.id==='t0'||t.id==='t1'))first++}ok(first<110,'menos escuchadas primero '+first);
+const M=U.mergeLists([[T[0],T[2]],[T[1],T[3]]],'weave');ok(M.map(t=>t.id).join()==='a,c,d','merge sin duplicados '+M.map(t=>t.id));ok(U.mergeLists([[T[2]],[T[3]]],'concat').length===2,'concat');
+ok(U.moveItem([1,2,3,4],0,2).join()==='2,3,1,4'&&U.moveItem([1,2],5,0).join()==='1,2','moveItem');
+ok(U.normGain(-20,-14,6,10)===6&&U.normGain(-5,-14,6,10)===-9&&U.normGain(null,-14,6,10)===0&&U.normGain(-2,-14,6,6)===-6,'normGain');ok(Math.abs(U.dbLin(6)-1.9953)<1e-3,'dbLin');
+const now=new Date('2026-11-05T15:00:00').getTime();const H=[{id:'a',title:'A',artist:'X',ts:now-1e3,ms:60000,counted:true},{id:'a',title:'A',artist:'X',ts:now-2*864e5,ms:30000,counted:true},{id:'b',title:'B',artist:'Y',ts:now-20*864e5,ms:10000,counted:false}];
+const st=U.statsOf(H,now);ok(st.total===100000&&st.today===60000&&st.week===90000&&st.plays===2&&st.tracks[0].id==='a'&&st.tracks[0].plays===2&&st.artists[0].artist==='X','stats');
+ok(Object.values(U.EQ_PRESETS).every(a=>a.length===5),'presets');
+console.log('PURE TESTS OK:',n);

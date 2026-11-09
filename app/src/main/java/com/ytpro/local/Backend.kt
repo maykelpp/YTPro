@@ -43,8 +43,10 @@ class Entry(
         .put("hasLyrics", lyrics.isNotEmpty()).put("artist", artist).put("track", track).put("duration", duration)
 }
 
-class Job(val id: String, val url: String, var title: String, val opts: JSONObject) {
+class Job(val id: String, val url: String, var title: String, val opts: JSONObject, val created: Long = System.currentTimeMillis()) {
     @Volatile var status = "queued"
+    @Volatile var paused = false
+    @Volatile var resume = false
     @Volatile var step = "En cola"
     @Volatile var pct = 0.0
     @Volatile var speed = ""
@@ -52,7 +54,6 @@ class Job(val id: String, val url: String, var title: String, val opts: JSONObje
     @Volatile var error = ""
     @Volatile var files: List<Entry> = emptyList()
     @Volatile var cancel = false
-    val created = System.currentTimeMillis()
 
     fun json(): JSONObject = JSONObject().put("id", id).put("url", url).put("title", title)
         .put("status", status).put("step", step).put("pct", pct).put("speed", speed).put("eta", eta)
@@ -90,6 +91,9 @@ object Backend {
         tmpDir = File(appCtx.getExternalFilesDir(null) ?: appCtx.filesDir, "tmp").also { it.mkdirs() }
         pool.corePoolSize = prefs.getInt("parallel", 2).coerceIn(1, 4)
         loadIndex()
+        MusicLib.start(appCtx)
+        MusicLib.scanAsync()
+        loadJobs()
         server = Srv().also { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false) }
         Thread { initEngine() }.start()
     }
@@ -100,6 +104,7 @@ object Backend {
             FFmpeg.getInstance().init(appCtx)
             try { Aria2c.getInstance().init(appCtx); ariaOk = true } catch (_: Throwable) {}
             ready = true
+            autoResumeJobs()
             if (prefs.getBoolean("autoUpdate", true) &&
                 System.currentTimeMillis() - prefs.getLong("lastUpdate", 0L) > 86_400_000L) runUpdate()
         } catch (e: Throwable) {
@@ -256,14 +261,72 @@ object Backend {
             p == "/api/info" && m == Method.POST -> json(info(body().getString("url").trim()))
             p == "/api/download" && m == Method.POST -> download(body())
             p == "/api/jobs" -> json(JSONArray(jobs.values.sortedByDescending { it.created }.map { it.json() }))
+            p.startsWith("/api/jobs/") && p.endsWith("/pause") && m == Method.POST -> {
+                jobs[p.removePrefix("/api/jobs/").removeSuffix("/pause")]?.let { pauseJob(it) }
+                json(JSONObject().put("ok", true))
+            }
+            p.startsWith("/api/jobs/") && p.endsWith("/resume") && m == Method.POST -> {
+                jobs[p.removePrefix("/api/jobs/").removeSuffix("/resume")]?.let { resumeJob(it) }
+                json(JSONObject().put("ok", true))
+            }
+            p == "/api/music/library" -> json(MusicLib.libraryJson())
+            p == "/api/music/scan" && m == Method.POST -> { MusicLib.scanAsync(); json(JSONObject().put("ok", true)) }
+            p == "/api/music/folders" && m == Method.DELETE -> { MusicLib.removeFolder(q("uri")); json(JSONObject().put("ok", true)) }
+            p.startsWith("/music/") -> {
+                val t = MusicLib.find(p.removePrefix("/music/"))
+                if (t == null) text(Response.Status.NOT_FOUND, "no") else serveUri(s, t.uri, t.mime)
+            }
+            p == "/api/art" -> {
+                val uri = MusicLib.find(q("id"))?.uri ?: entry(q("id"))?.uri
+                val bytes = if (uri == null) null else MusicLib.art(uri)
+                if (bytes == null) text(Response.Status.NOT_FOUND, "no") else {
+                    val r = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "image/jpeg", java.io.ByteArrayInputStream(bytes), bytes.size.toLong())
+                    r.addHeader("Cache-Control", "max-age=86400")
+                    r
+                }
+            }
+            p == "/api/loudness" -> {
+                val uri = MusicLib.find(q("id"))?.uri ?: entry(q("id"))?.uri
+                val db = if (uri == null) null else MusicLib.loudnessDb(uri)
+                json(JSONObject().put("db", db ?: JSONObject.NULL))
+            }
+            p == "/api/music/lyrics" && m == Method.GET -> {
+                val t = MusicLib.find(q("id"))
+                json(JSONObject().put("text", if (t == null) "" else MusicLib.lyricsFor(t)))
+            }
+            p == "/api/music/lyrics/find" && m == Method.POST -> {
+                val b = body()
+                val t = MusicLib.find(b.optString("id"))
+                if (t == null) text(Response.Status.NOT_FOUND, "no") else {
+                    val qn = b.optString("q").trim()
+                    val (qa, qt) = if (qn.isNotEmpty()) splitArtist(t.artist, qn) else (t.artist to t.title)
+                    val r = fetchLyrics(qa.ifEmpty { t.artist }, qt.ifEmpty { t.title }, t.durMs / 1000.0)
+                    if (r != null) MusicLib.saveLyrics(t.id, r)
+                    json(JSONObject().put("ok", r != null))
+                }
+            }
+            p == "/api/music/delete" && m == Method.DELETE -> {
+                val t = MusicLib.find(q("id"))
+                if (t == null || !t.writable) text(Response.Status.FORBIDDEN, "Android solo deja borrar archivos de YT Pro o de carpetas con permiso de escritura.")
+                else {
+                    try {
+                        val u = Uri.parse(t.uri)
+                        if (t.src == "saf") android.provider.DocumentsContract.deleteDocument(appCtx.contentResolver, u) else appCtx.contentResolver.delete(u, null, null)
+                    } catch (_: Exception) {}
+                    index.removeAll(index.filter { it.uri == t.uri }.toSet()); saveIndex()
+                    MusicLib.invalidate(t.uri)
+                    json(JSONObject().put("ok", true))
+                }
+            }
+            p == "/api/tags/write" && m == Method.POST -> {
+                val b = body()
+                val err = writeTags(b.optString("id"), b)
+                if (err == null) json(JSONObject().put("ok", true)) else text(Response.Status.BAD_REQUEST, err)
+            }
             p.startsWith("/api/jobs/") && m == Method.DELETE -> {
                 val id = p.removePrefix("/api/jobs/")
                 val j = jobs[id]
-                if (j != null && (j.status == "queued" || j.status == "running")) {
-                    j.cancel = true
-                    try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Throwable) {}
-                    if (j.status == "queued") { j.status = "error"; j.step = "Cancelado"; j.error = "Cancelado" }
-                } else jobs.remove(id)
+                if (j != null && j.status in listOf("queued", "running", "paused")) cancelJob(j) else jobs.remove(id)
                 json(JSONObject().put("ok", true))
             }
             p == "/api/library" && m == Method.GET -> library()
@@ -283,7 +346,7 @@ object Backend {
     private fun settings() = JSONObject().put("parallel", prefs.getInt("parallel", 2)).put("anti", prefs.getBoolean("anti", false))
         .put("dest", prefs.getString("dest", "media")).put("wifi", prefs.getBoolean("wifi", false))
         .put("autoUpdate", prefs.getBoolean("autoUpdate", true)).put("aria", prefs.getBoolean("aria", true))
-        .put("lyrics", prefs.getBoolean("lyrics", true)).put("ariaOk", ariaOk).put("updUrl", prefs.getString("updUrl", "http://127.0.0.1:5001"))
+        .put("lyrics", prefs.getBoolean("lyrics", true)).put("autoResume", prefs.getBoolean("autoResume", true)).put("ariaOk", ariaOk).put("updUrl", prefs.getString("updUrl", "http://127.0.0.1:5001"))
 
     private fun applySettings(b: JSONObject) {
         val e = prefs.edit()
@@ -292,6 +355,7 @@ object Backend {
         if (b.has("wifi")) e.putBoolean("wifi", b.optBoolean("wifi"))
         if (b.has("autoUpdate")) e.putBoolean("autoUpdate", b.optBoolean("autoUpdate"))
         if (b.has("aria")) e.putBoolean("aria", b.optBoolean("aria"))
+        if (b.has("autoResume")) e.putBoolean("autoResume", b.optBoolean("autoResume"))
         if (b.has("lyrics")) e.putBoolean("lyrics", b.optBoolean("lyrics"))
         if (b.has("updUrl")) {
             val u = b.optString("updUrl").trim().trimEnd('/')
@@ -479,6 +543,8 @@ object Backend {
         val title = b.optString("title").ifEmpty { url }.take(150)
         val job = Job(UUID.randomUUID().toString().replace("-", "").take(10), url, title, o)
         jobs[job.id] = job
+        persistJobs()
+        DownloadService.ensure(appCtx)
         pool.execute { runJob(job) }
         return json(JSONObject().put("id", job.id))
     }
@@ -685,13 +751,141 @@ object Backend {
         else -> " Comprueba el enlace y prueba actualizar yt-dlp."
     }
 
+    // ------------------------------------------------------------ descargas en segundo plano: pausar / reanudar / cancelar / recuperar
+    private val restored = CopyOnWriteArrayList<Job>()
+
+    private fun jobsFile() = File(appCtx.filesDir, "jobs.json")
+
+    @Synchronized
+    fun persistJobs() {
+        try {
+            val a = JSONArray()
+            jobs.values.filter { it.status == "queued" || it.status == "running" || it.status == "paused" }.forEach {
+                a.put(JSONObject().put("id", it.id).put("url", it.url).put("title", it.title).put("opts", it.opts)
+                    .put("created", it.created).put("pct", it.pct))
+            }
+            jobsFile().writeText(a.toString())
+        } catch (_: Exception) {}
+    }
+
+    private fun loadJobs() {
+        try {
+            val f = jobsFile()
+            if (!f.exists()) return
+            val a = JSONArray(f.readText())
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                val j = Job(o.getString("id"), o.getString("url"), o.optString("title"), o.getJSONObject("opts"), o.optLong("created", System.currentTimeMillis()))
+                j.status = "paused"; j.step = "Interrumpida: reanuda para continuar"; j.pct = o.optDouble("pct", 0.0); j.resume = true; j.paused = true
+                jobs[j.id] = j
+                restored.add(j)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun autoResumeJobs() {
+        if (prefs.getBoolean("autoResume", true)) restored.forEach { resumeJob(it) }
+        restored.clear()
+    }
+
+    fun summary(): JSONObject {
+        val act = jobs.values.filter { it.status == "running" || it.status == "queued" }
+        val run = act.filter { it.status == "running" }
+        return JSONObject().put("active", act.size).put("paused", jobs.values.count { it.status == "paused" })
+            .put("pct", if (run.isEmpty()) 0 else run.map { it.pct }.average().toInt())
+            .put("name", (run.firstOrNull() ?: act.firstOrNull())?.title ?: "")
+    }
+
+    fun pauseJob(j: Job) {
+        when (j.status) {
+            "queued" -> { j.status = "paused"; j.step = "En pausa"; j.paused = true; j.resume = true }
+            "running" -> { j.paused = true; try { YoutubeDL.getInstance().destroyProcessById(j.id) } catch (_: Throwable) {} }
+        }
+        persistJobs()
+    }
+
+    fun resumeJob(j: Job) {
+        if (j.status != "paused") return
+        j.paused = false; j.cancel = false; j.resume = true; j.status = "queued"; j.step = "En cola"
+        persistJobs()
+        DownloadService.ensure(appCtx)
+        pool.execute { runJob(j) }
+    }
+
+    fun cancelJob(j: Job) {
+        if (j.status != "queued" && j.status != "running" && j.status != "paused") return
+        j.cancel = true; j.paused = false
+        try { YoutubeDL.getInstance().destroyProcessById(j.id) } catch (_: Throwable) {}
+        if (j.status != "running") {
+            j.status = "error"; j.step = "Cancelado"; j.error = "Cancelado"
+            File(tmpDir, "job_${j.id}").deleteRecursively()
+        }
+        persistJobs()
+    }
+
+    fun pauseAll() = jobs.values.toList().forEach { pauseJob(it) }
+    fun resumeAll() = jobs.values.toList().forEach { resumeJob(it) }
+    fun cancelAll() = jobs.values.toList().forEach { cancelJob(it) }
+
+    fun entryByUri(uri: String): Entry? = index.firstOrNull { it.uri == uri }
+
+    /** Sirve cualquier archivo (MediaStore o SAF) con soporte de Range para poder hacer seek. */
+    private fun serveUri(s: IHTTPSession, uri: String, mime: String): Response {
+        val pfd = appCtx.contentResolver.openFileDescriptor(Uri.parse(uri), "r") ?: return text(Response.Status.NOT_FOUND, "no")
+        val len = pfd.statSize
+        val ins = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+        val range = s.headers["range"]
+        if (range != null && range.startsWith("bytes=")) {
+            val parts = range.removePrefix("bytes=").split("-")
+            val start = parts[0].toLongOrNull() ?: 0L
+            val end = parts.getOrNull(1)?.toLongOrNull() ?: (len - 1)
+            if (start >= len) { ins.close(); return text(Response.Status.RANGE_NOT_SATISFIABLE, "rango") }
+            ins.skip(start)
+            val r = NanoHTTPD.newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, ins, end - start + 1)
+            r.addHeader("Content-Range", "bytes $start-$end/$len")
+            r.addHeader("Accept-Ranges", "bytes")
+            return r
+        }
+        val r = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, mime, ins, len)
+        r.addHeader("Accept-Ranges", "bytes")
+        return r
+    }
+
+    // ------------------------------------------------------------ editor de etiquetas: escribe de verdad en el archivo
+    /** Usa yt-dlp + FFmpeg incluidos (--enable-file-urls) para reescribir las etiquetas sin recodificar. Devuelve un error o null. */
+    private fun writeTags(id: String, f: JSONObject): String? {
+        val t = MusicLib.find(id) ?: return "No encuentro esa cancion en la biblioteca."
+        if (!t.writable) return "Android no deja editar archivos de otras apps. Anade su carpeta en Ajustes > Carpetas de musica (con permiso de escritura) y vuelve a intentarlo."
+        try { awaitEngine() } catch (e: Exception) { return e.message }
+        val ext = when (t.mime.substringAfter('/', "mp4")) { "mpeg" -> "mp3"; "mp4", "*", "x-m4a" -> "m4a"; "x-wav" -> "wav"; "ogg" -> "ogg"; "flac", "x-flac" -> "flac"; else -> "m4a" }
+        val dir = File(tmpDir, "tag_${System.currentTimeMillis()}").also { it.mkdirs() }
+        return try {
+            val src = File(dir, "in.$ext")
+            appCtx.contentResolver.openInputStream(Uri.parse(t.uri))?.use { i -> src.outputStream().use { o -> i.copyTo(o, 1 shl 16) } } ?: return "No pude leer el archivo."
+            val r = YoutubeDLRequest("file://" + src.absolutePath)
+            r.addOption("--enable-file-urls"); r.addOption("--no-playlist"); r.addOption("-P", dir.absolutePath)
+            r.addOption("-o", "out.%(ext)s"); r.addOption("--embed-metadata")
+            for (k in listOf("title", "artist", "album", "album_artist", "genre", "date", "track", "comment")) {
+                val v = f.optString(k).trim().replace(Regex("[\r\n]+"), " ")
+                if (v.isNotEmpty()) r.addOption("--parse-metadata", v.replace("%", "%%").replace(":", "\\:") + ":(?s)(?P<meta_$k>.+)")
+            }
+            YoutubeDL.getInstance().execute(r)
+            val out = dir.listFiles()?.firstOrNull { it.name.startsWith("out.") && it.length() > 1024 } ?: return "El motor no genero el archivo nuevo."
+            appCtx.contentResolver.openOutputStream(Uri.parse(t.uri), "wt")?.use { o -> out.inputStream().use { it.copyTo(o, 1 shl 16) } } ?: return "No pude escribir en el archivo."
+            MusicLib.invalidate(t.uri)
+            null
+        } catch (e: Exception) { (e.message ?: e.toString()).take(160) }
+        finally { dir.deleteRecursively() }
+    }
+
     private fun runJob(job: Job) {
         val o = job.opts
         val kind = o.getString("kind")
         val exts = when (kind) { "subs" -> setOf("srt"); "thumb" -> setOf("jpg"); else -> AV }
         val tmp = File(tmpDir, "job_${job.id}")
-        job.status = "running"
-        job.step = "Preparando"
+        synchronized(job) { if (job.status != "queued") return; job.status = "running" }
+        job.step = if (job.resume) "Reanudando" else "Preparando"
+        persistJobs()
         var firstErr: String? = null
         var fast = prefs.getBoolean("aria", true) && ariaOk
         try { awaitEngine() } catch (e: Exception) { firstErr = e.message }
@@ -703,8 +897,10 @@ object Backend {
         val lyrText = lyr
         if (firstErr == null) for (cl in clients(job.url, true)) {
             if (job.cancel) break
-            tmp.deleteRecursively(); tmp.mkdirs()
-            job.pct = 0.0
+            if (!job.resume) tmp.deleteRecursively()
+            tmp.mkdirs()
+            if (!job.resume) job.pct = 0.0
+            job.resume = false
             try {
                 val r = YoutubeDLRequest(job.url)
                 args(r, o, tmp, cl, fast, lyr)
@@ -741,12 +937,14 @@ object Backend {
                     index.addAll(saved); saveIndex()
                     prefs.edit().putString("good", cl ?: "").apply()
                     job.files = saved; job.pct = 100.0; job.step = "Listo"; job.status = "done"
+                    persistJobs()
                     return
                 }
                 if (firstErr == null) firstErr = "No se genero ningun archivo"
                 fast = false
                 lyr = null
             } catch (e: Exception) {
+                if (job.paused) { job.status = "paused"; job.step = "En pausa"; job.speed = ""; job.eta = ""; job.resume = true; persistJobs(); return }
                 if (job.cancel) break
                 val message = (e.message ?: e.toString()).take(220)
                 if (firstErr == null) firstErr = message
@@ -763,5 +961,6 @@ object Backend {
         job.step = if (job.cancel) "Cancelado" else "Error"
         job.error = if (job.cancel) "Cancelado" else (firstErr ?: "Error") + hint(firstErr)
         job.status = "error"
+        persistJobs()
     }
 }
