@@ -259,6 +259,7 @@ object Backend {
             }
             p == "/api/search" -> json(search(q("q")))
             p == "/api/info" && m == Method.POST -> json(info(body().getString("url").trim()))
+            p == "/api/preview" -> json(preview(q("url")))
             p == "/api/download" && m == Method.POST -> download(body())
             p == "/api/jobs" -> json(JSONArray(jobs.values.sortedByDescending { it.created }.map { it.json() }))
             p.startsWith("/api/jobs/") && p.endsWith("/pause") && m == Method.POST -> {
@@ -474,6 +475,32 @@ object Backend {
                 .put("thumb", "https://i.ytimg.com/vi/$id/mqdefault.jpg"))
         }
         return out
+    }
+
+    /** Obtiene una URL temporal de audio para escuchar una vista previa sin descargar el archivo. */
+    private fun preview(url: String): JSONObject {
+        if (!Regex("^https?://(www\\.)?(youtube\\.com|youtu\\.be)/").containsMatchIn(url))
+            throw Exception("La vista previa de esta primera versión solo está disponible para resultados de YouTube.")
+        awaitEngine()
+        var err: Exception? = null
+        for (cl in clients(url, false)) {
+            try {
+                val r = YoutubeDLRequest(url)
+                playerClient(r, cl)
+                r.addOption("--no-playlist")
+                r.addOption("--no-warnings")
+                r.addOption("-f", "bestaudio/best")
+                r.addOption("-g")
+                val audio = YoutubeDL.getInstance().execute(r).out.lineSequence().map { it.trim() }.firstOrNull { it.startsWith("https://") }
+                    ?: throw Exception("YouTube no devolvió una URL de audio.")
+                return JSONObject().put("audio", audio).put("expires", "temporary")
+            } catch (e: Exception) {
+                err = e
+                if (isRateLimited(e)) break
+            }
+        }
+        if (isRateLimited(err)) throw Exception("YouTube está limitando las solicitudes (HTTP 429). Espera unos minutos.")
+        throw err ?: Exception("No se pudo preparar el audio de vista previa.")
     }
 
     private fun info(url: String): JSONObject {
